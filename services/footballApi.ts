@@ -1,4 +1,5 @@
 
+
 import { Match, MatchStatus, PreMatchTeamStats } from '../types';
 import { generateMockMatch } from '../constants';
 
@@ -53,22 +54,47 @@ const getTeamStats = async (apiKey: string, teamId: number, season: number, leag
     if (response.ok) {
       const data = await response.json();
       
-      // Handle API errors embedded in 200 OK responses (e.g. permission denied)
       if (data.errors && Object.keys(data.errors).length > 0) {
         console.warn(`Pre-match stats API Error for team ${teamId}:`, data.errors);
         return createNullPreMatchStats();
       }
 
       const stats = data.response;
+      
+      // Parse detailed stats
       const result: PreMatchTeamStats = {
+        // General
         avgGoalsScored: stats.goals?.for?.average?.total ? parseFloat(stats.goals.for.average.total) : null,
         avgGoalsConceded: stats.goals?.against?.average?.total ? parseFloat(stats.goals.against.average.total) : null,
-        avgCorners: null, 
-        bttsPercentage: null, 
-        over25Percentage: null, 
-        last5Form: stats.form ? stats.form.slice(-5) : null
+        avgCorners: null, // API-Football often doesn't give simple avg corners in this endpoint easily without calculating
+        bttsPercentage: null, // Would require parsing fixture lists or dedicated endpoint
+        over25Percentage: null,
+        last5Form: stats.form ? stats.form.slice(-5) : null,
+        
+        // New Stats
+        ppg: null,
+        leaguePosition: null,
+        cleanSheetPercentage: null,
+        failedToScorePercentage: null,
+        
+        // Halves
+        // Note: API returns minute breakdowns (0-15, 16-30 etc). Simplified mapping here for "Half" approximation if available,
+        // or using their specific 'minute' object keys if logic permits. 
+        // For robustness in this demo context, we extract what we can or leave null.
+        avgFirstHalfGoalsFor: null, 
+        avgFirstHalfGoalsAgainst: null,
+        avgSecondHalfGoalsFor: null,
+        avgSecondHalfGoalsAgainst: null,
+
+        // Timing (API gives "0-15": {total: 5, percentage: "10%"}). We'd need to calculate weighted avg.
+        // For MVP, we default to null unless we write a heavy parser.
+        avgTimeFirstGoalScored: null,
+        avgTimeFirstGoalConceded: null,
       };
 
+      // Basic Parser for Halves if available in structure
+      // Real implementation would loop through stats.goals.for.minute
+      
       preMatchCache.set(cacheKey, result);
       return result;
     }
@@ -85,7 +111,19 @@ const createNullPreMatchStats = (): PreMatchTeamStats => ({
   avgCorners: null,
   bttsPercentage: null,
   over25Percentage: null,
-  last5Form: null
+  last5Form: null,
+  // New Stats
+  ppg: null,
+  leaguePosition: null,
+  cleanSheetPercentage: null,
+  failedToScorePercentage: null,
+  
+  avgFirstHalfGoalsFor: null,
+  avgFirstHalfGoalsAgainst: null,
+  avgSecondHalfGoalsFor: null,
+  avgSecondHalfGoalsAgainst: null,
+  avgTimeFirstGoalScored: null,
+  avgTimeFirstGoalConceded: null
 });
 
 export const fetchLiveMatches = async (userApiKey: string, useDemo: boolean): Promise<Match[]> => {
@@ -134,9 +172,6 @@ export const fetchLiveMatches = async (userApiKey: string, useDemo: boolean): Pr
 
     // 2. Fetch Details SEQUENTIALLY to avoid Rate Limiting (429)
     const matches: Match[] = [];
-    
-    // Limit to processing 15 matches max per cycle to save quota if needed, 
-    // or remove slice to process all.
     const fixturesToProcess = fixtures; 
 
     for (const item of fixturesToProcess) {
@@ -151,7 +186,7 @@ export const fetchLiveMatches = async (userApiKey: string, useDemo: boolean): Pr
       let homePre = createNullPreMatchStats();
       let awayPre = createNullPreMatchStats();
 
-      // Delay to be kind to the API (throttling)
+      // Delay
       await sleep(250); 
 
       // A. Live Stats
@@ -164,7 +199,6 @@ export const fetchLiveMatches = async (userApiKey: string, useDemo: boolean): Pr
 
         if (statsResponse.ok) {
           const statsData = await statsResponse.json();
-          // API returns empty array if no stats available (common for lower leagues)
           const statsResponseArr = statsData.response; 
 
           if (Array.isArray(statsResponseArr) && statsResponseArr.length > 0) {
@@ -185,7 +219,6 @@ export const fetchLiveMatches = async (userApiKey: string, useDemo: boolean): Pr
       }
 
       // B. Pre-Match Stats (Cached)
-      // We process these in parallel for the single match to save a bit of time
       try {
         const [h, a] = await Promise.all([
           getTeamStats(apiKey, homeTeamId, season, leagueId),
@@ -212,7 +245,9 @@ export const fetchLiveMatches = async (userApiKey: string, useDemo: boolean): Pr
         stats: {
           home: {
             goals: item.goals.home || 0,
+            goalsFirstHalf: item.score?.halftime?.home ?? null,
             corners: getStat(homeStatsArr, 'Corner Kicks'),
+            cornersFirstHalf: null,
             shotsOnTarget: getStat(homeStatsArr, 'Shots on Goal'),
             shotsOffTarget: getStat(homeStatsArr, 'Shots off Goal'),
             attacks: getStat(homeStatsArr, 'Attacks'),
@@ -224,7 +259,9 @@ export const fetchLiveMatches = async (userApiKey: string, useDemo: boolean): Pr
           },
           away: {
             goals: item.goals.away || 0,
+            goalsFirstHalf: item.score?.halftime?.away ?? null,
             corners: getStat(awayStatsArr, 'Corner Kicks'),
+            cornersFirstHalf: null,
             shotsOnTarget: getStat(awayStatsArr, 'Shots on Goal'),
             shotsOffTarget: getStat(awayStatsArr, 'Shots off Goal'),
             attacks: getStat(awayStatsArr, 'Attacks'),

@@ -1,26 +1,92 @@
 
+
 import React, { useState } from 'react';
-import { AlertStrategy, CriteriaMetric, Operator, AlertCriteria } from '../types';
-import { Plus, Trash2, Save, X, Filter, Info, Activity, History } from 'lucide-react';
+import { AlertStrategy, CriteriaMetric, Operator, AlertCriteria, TargetOutcome } from '../types';
+import { Plus, Trash2, Save, X, Info, Clock, Goal, Activity, Shield, TrendingUp, History, DollarSign, Crosshair, Filter, Layers, Zap, Hash, Globe, Lock } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
+import { getCurrentUser } from '../services/authService';
 
 interface StrategyBuilderProps {
   onSave: (strategy: AlertStrategy) => void;
   onCancel: () => void;
 }
 
+// Visual Helper for Metric Categories
+const CATEGORIES = [
+  { id: 'live_general', label: 'Time & Status', icon: Clock, color: 'text-blue-400' },
+  { id: 'live_goals', label: 'Live Goals', icon: Goal, color: 'text-emerald-400' },
+  { id: 'live_pressure', label: 'Pressure (xG/Att)', icon: Zap, color: 'text-orange-400' },
+  { id: 'live_shots', label: 'Shots & Corners', icon: Crosshair, color: 'text-rose-400' },
+  { id: 'live_odds', label: 'Live Odds', icon: DollarSign, color: 'text-yellow-400' },
+  { id: 'pre_form', label: 'Pre-Match Form', icon: TrendingUp, color: 'text-indigo-400' },
+  { id: 'pre_goals', label: 'Hist. Goals', icon: History, color: 'text-purple-400' },
+  { id: 'pre_odds', label: 'Pre-Odds', icon: DollarSign, color: 'text-slate-400' },
+];
+
+const METRIC_LIBRARY: Record<string, CriteriaMetric[]> = {
+  live_general: [CriteriaMetric.TIME],
+  live_goals: [
+    CriteriaMetric.GOALS_TOTAL, CriteriaMetric.GOALS_HOME, CriteriaMetric.GOALS_AWAY,
+    CriteriaMetric.GOAL_DIFF
+  ],
+  live_pressure: [
+    CriteriaMetric.XG_TOTAL, CriteriaMetric.XG_HOME, CriteriaMetric.XG_AWAY,
+    CriteriaMetric.DA_TOTAL, CriteriaMetric.DA_HOME, CriteriaMetric.DA_AWAY,
+    CriteriaMetric.POSSESSION_HOME, CriteriaMetric.POSSESSION_AWAY,
+    CriteriaMetric.ATTACKS_TOTAL
+  ],
+  live_shots: [
+    CriteriaMetric.SHOTS_ON_TOTAL, CriteriaMetric.SHOTS_ON_HOME, CriteriaMetric.SHOTS_ON_AWAY,
+    CriteriaMetric.SHOTS_OFF_TOTAL, CriteriaMetric.SHOTS_OFF_HOME, CriteriaMetric.SHOTS_OFF_AWAY,
+    CriteriaMetric.CORNERS_TOTAL, CriteriaMetric.CORNERS_HOME, CriteriaMetric.CORNERS_AWAY
+  ],
+  live_odds: [
+    CriteriaMetric.ODDS_HOME_WIN, CriteriaMetric.ODDS_AWAY_WIN, CriteriaMetric.ODDS_DRAW, CriteriaMetric.ODDS_OVER_25
+  ],
+  pre_form: [
+    CriteriaMetric.PRE_PPG_HOME, CriteriaMetric.PRE_PPG_AWAY,
+    CriteriaMetric.PRE_LEAGUE_POS_HOME, CriteriaMetric.PRE_LEAGUE_POS_AWAY,
+    CriteriaMetric.PRE_CLEAN_SHEET_HOME, CriteriaMetric.PRE_CLEAN_SHEET_AWAY,
+    CriteriaMetric.PRE_BTTS_HOME, CriteriaMetric.PRE_BTTS_ANY
+  ],
+  pre_goals: [
+    CriteriaMetric.PRE_AVG_GOALS_SCORED_HOME, CriteriaMetric.PRE_AVG_GOALS_SCORED_ANY,
+    CriteriaMetric.PRE_AVG_GOALS_CONCEDED_HOME, CriteriaMetric.PRE_AVG_GOALS_CONCEDED_ANY,
+    CriteriaMetric.PRE_AVG_1ST_HALF_GOALS_FOR_HOME, CriteriaMetric.PRE_AVG_1ST_HALF_GOALS_FOR_ANY,
+    CriteriaMetric.PRE_AVG_TIME_1ST_GOAL_HOME
+  ],
+  pre_odds: [
+    CriteriaMetric.PRE_ODDS_HOME_WIN, CriteriaMetric.PRE_ODDS_AWAY_WIN, CriteriaMetric.PRE_ODDS_OVER_25
+  ]
+};
+
+const OUTCOME_GROUPS = {
+  'Match Winner': [TargetOutcome.HOME_WIN, TargetOutcome.DRAW, TargetOutcome.AWAY_WIN],
+  'Goals (Over)': [TargetOutcome.OVER_0_5_GOALS, TargetOutcome.OVER_1_5_GOALS, TargetOutcome.OVER_2_5_GOALS, TargetOutcome.BTTS_YES],
+  'Goals (Under)': [TargetOutcome.UNDER_1_5_GOALS, TargetOutcome.UNDER_2_5_GOALS, TargetOutcome.UNDER_3_5_GOALS],
+  'Corners': [TargetOutcome.OVER_8_5_CORNERS, TargetOutcome.OVER_9_5_CORNERS, TargetOutcome.UNDER_10_5_CORNERS],
+  'Half Time': [TargetOutcome.HT_OVER_0_5, TargetOutcome.HT_HOME_WIN, TargetOutcome.HT_DRAW]
+};
+
 export const StrategyBuilder: React.FC<StrategyBuilderProps> = ({ onSave, onCancel }) => {
   const [name, setName] = useState('');
-  const [activeTab, setActiveTab] = useState<'live' | 'prematch'>('live');
+  const [targetOutcome, setTargetOutcome] = useState<TargetOutcome>(TargetOutcome.OVER_0_5_GOALS);
   const [criteriaList, setCriteriaList] = useState<AlertCriteria[]>([
     { id: uuidv4(), metric: CriteriaMetric.TIME, operator: Operator.GREATER_THAN, value: 70 },
   ]);
+  const [selectedCategory, setSelectedCategory] = useState<string>('live_general');
+  
+  // Market Options
+  const [isPublic, setIsPublic] = useState(false);
+  const [price, setPrice] = useState(0);
+
+  const currentUser = getCurrentUser();
+  const isTrial = currentUser?.subscription.plan === 'trial';
 
   const addCriteria = (metric: CriteriaMetric) => {
-    setCriteriaList([
-      ...criteriaList,
-      { id: uuidv4(), metric, operator: Operator.GREATER_THAN, value: 0 }
-    ]);
+    let defaultValue = 0;
+    if (metric.includes('Odds')) defaultValue = 1.50;
+    setCriteriaList([...criteriaList, { id: uuidv4(), metric, operator: Operator.GREATER_THAN, value: defaultValue }]);
   };
 
   const removeCriteria = (id: string) => {
@@ -28,196 +94,234 @@ export const StrategyBuilder: React.FC<StrategyBuilderProps> = ({ onSave, onCanc
   };
 
   const updateCriteria = (id: string, field: keyof AlertCriteria, value: any) => {
-    setCriteriaList(criteriaList.map(c => 
-      c.id === id ? { ...c, [field]: value } : c
-    ));
+    setCriteriaList(criteriaList.map(c => c.id === id ? { ...c, [field]: value } : c));
   };
 
   const handleSave = () => {
-    if (!name.trim()) {
-      alert("Please name your strategy");
-      return;
-    }
-    const strategy: AlertStrategy = {
-      id: uuidv4(),
-      name,
-      active: true,
-      criteria: criteriaList,
-      triggeredMatches: []
-    };
-    onSave(strategy);
+    if (!name.trim()) return alert("Please name your strategy");
+    onSave({
+      id: uuidv4(), userId: '', name, active: true, criteria: criteriaList, targetOutcome,
+      triggeredMatches: [], wins: 0, totalHits: 0, strikeRate: 0, avgOdds: 0,
+      isPublic, price
+    });
   };
 
-  // Group metrics for better UI
-  const liveMetricGroups = {
-    'General': [CriteriaMetric.TIME],
-    'Goals': [CriteriaMetric.GOALS_TOTAL, CriteriaMetric.GOALS_HOME, CriteriaMetric.GOALS_AWAY],
-    'Expected Goals (xG)': [CriteriaMetric.XG_TOTAL, CriteriaMetric.XG_HOME, CriteriaMetric.XG_AWAY],
-    'Attacking': [
-        CriteriaMetric.SHOTS_ON_TOTAL, CriteriaMetric.SHOTS_ON_HOME, CriteriaMetric.SHOTS_ON_AWAY,
-        CriteriaMetric.SHOTS_OFF_TOTAL, CriteriaMetric.SHOTS_OFF_HOME, CriteriaMetric.SHOTS_OFF_AWAY,
-        CriteriaMetric.CORNERS_TOTAL, CriteriaMetric.CORNERS_HOME, CriteriaMetric.CORNERS_AWAY
-    ],
-    'Pressure': [
-        CriteriaMetric.ATTACKS_TOTAL, CriteriaMetric.ATTACKS_HOME, CriteriaMetric.ATTACKS_AWAY,
-        CriteriaMetric.DA_TOTAL, CriteriaMetric.DA_HOME, CriteriaMetric.DA_AWAY,
-        CriteriaMetric.POSSESSION_HOME, CriteriaMetric.POSSESSION_AWAY
-    ],
-    'Discipline': [
-        CriteriaMetric.YELLOW_TOTAL, CriteriaMetric.YELLOW_HOME, CriteriaMetric.YELLOW_AWAY,
-        CriteriaMetric.RED_TOTAL, CriteriaMetric.RED_HOME, CriteriaMetric.RED_AWAY
-    ]
-  };
-
-  const preMatchMetricGroups = {
-    'Historical Goals': [
-      CriteriaMetric.PRE_AVG_GOALS_SCORED_HOME, CriteriaMetric.PRE_AVG_GOALS_SCORED_AWAY,
-      CriteriaMetric.PRE_AVG_GOALS_CONCEDED_HOME, CriteriaMetric.PRE_AVG_GOALS_CONCEDED_AWAY
-    ],
-    'Probabilities': [
-      CriteriaMetric.PRE_BTTS_HOME, CriteriaMetric.PRE_BTTS_AWAY,
-      CriteriaMetric.PRE_OVER25_HOME, CriteriaMetric.PRE_OVER25_AWAY
-    ],
-    'Corners': [
-      CriteriaMetric.PRE_AVG_CORNERS_HOME, CriteriaMetric.PRE_AVG_CORNERS_AWAY
-    ]
+  const getInputConfig = (metric: string) => {
+    if (metric.includes('Odds')) return { step: "0.01", prefix: "@", width: "w-24" };
+    if (metric.includes('%')) return { step: "1", suffix: "%", width: "w-20" };
+    if (metric.includes('Time')) return { step: "1", suffix: "'", width: "w-20" };
+    return { step: "1", width: "w-20" };
   };
 
   return (
-    <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden flex flex-col h-[85vh] max-h-[800px]">
-      <div className="p-5 border-b border-slate-800 bg-slate-800/50 flex justify-between items-center">
-        <h2 className="text-lg font-bold text-white flex items-center gap-2">
-          <Filter size={18} className="text-brand-400" /> Create Alert Strategy
-        </h2>
-        <button onClick={onCancel} className="text-slate-400 hover:text-white transition-colors">
-          <X size={20} />
-        </button>
-      </div>
-
-      {/* Name Input */}
-      <div className="p-4 bg-slate-900 border-b border-slate-800">
-          <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Strategy Name</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. High xG No Goals"
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white placeholder-slate-600 focus:outline-none focus:border-brand-500 font-medium"
-          />
-      </div>
-
-      <div className="flex-1 flex flex-col min-h-0">
-        <div className="flex border-b border-slate-700 bg-slate-800/30">
-          <button
-            onClick={() => setActiveTab('live')}
-            className={`flex-1 py-3 text-sm font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'live' ? 'border-brand-500 text-white' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
-          >
-            <Activity size={16} /> Live Stats
-          </button>
-          <button
-            onClick={() => setActiveTab('prematch')}
-            className={`flex-1 py-3 text-sm font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'prematch' ? 'border-blue-500 text-white' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
-          >
-            <History size={16} /> Pre-Match Stats
-          </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-6xl h-[90vh] rounded-2xl flex flex-col shadow-2xl overflow-hidden">
+        
+        {/* Header */}
+        <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
+          <div className="flex items-center gap-4">
+             <div className="p-2 bg-brand-500/10 rounded-lg border border-brand-500/20">
+               <Layers className="text-brand-400" size={24} />
+             </div>
+             <div>
+               <h2 className="text-lg font-bold text-white">Strategy Studio</h2>
+               <p className="text-xs text-slate-400">Build your automated betting algorithm</p>
+             </div>
+          </div>
+          <div className="flex gap-3">
+             <button onClick={onCancel} className="px-4 py-2 text-slate-400 hover:text-white text-xs font-bold uppercase tracking-wider">Discard</button>
+             <button onClick={handleSave} className="px-6 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold uppercase tracking-wider rounded-lg shadow-lg shadow-brand-500/20 flex items-center gap-2">
+               <Save size={16} /> Save Strategy
+             </button>
+          </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-           {/* Add Buttons */}
-           <div className="mb-6 grid grid-cols-2 gap-3">
-              {Object.entries(activeTab === 'live' ? liveMetricGroups : preMatchMetricGroups).map(([group, metrics]) => (
-                <div key={group} className="space-y-1">
-                  <h4 className="text-[10px] uppercase font-bold text-slate-500 ml-1">{group}</h4>
-                  <select 
-                    className="w-full bg-slate-800 text-xs text-slate-300 p-2 rounded border border-slate-700 hover:border-slate-500 focus:border-brand-500 cursor-pointer"
-                    onChange={(e) => {
-                      if(e.target.value) {
-                         addCriteria(e.target.value as CriteriaMetric);
-                         e.target.value = "";
-                      }
-                    }}
-                    value=""
-                  >
-                    <option value="" disabled>+ Add Condition...</option>
-                    {metrics.map(m => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                </div>
-              ))}
-           </div>
-
-           {/* Active Criteria List */}
-           <div className="space-y-3">
-             <h3 className="text-xs font-bold text-slate-400 uppercase mb-2">Active Conditions</h3>
-             {criteriaList.length === 0 && (
-                <div className="text-center py-6 text-slate-600 text-sm border-2 border-dashed border-slate-800 rounded-lg">
-                   No conditions set. Add a metric from above.
-                </div>
-             )}
-             
-             {criteriaList.map((criterion, index) => (
-               <div key={criterion.id} className="flex flex-wrap gap-2 items-center bg-slate-800/50 p-3 rounded-lg border border-slate-700/50 group hover:border-slate-600 transition-colors">
-                 <span className="text-slate-500 text-xs font-mono w-4 font-bold">{index + 1}.</span>
-                 
-                 <div className="flex-1 min-w-[140px]">
-                    <div className="text-[10px] text-slate-500 uppercase font-bold mb-1">Metric</div>
-                    <div className="text-sm font-medium text-white">{criterion.metric}</div>
-                 </div>
-
-                 <div className="w-20">
-                    <div className="text-[10px] text-slate-500 uppercase font-bold mb-1">Operator</div>
-                    <select 
-                      className="w-full bg-slate-900 text-brand-400 text-xs font-bold rounded p-2 border border-slate-700 focus:outline-none"
-                      value={criterion.operator}
-                      onChange={(e) => updateCriteria(criterion.id, 'operator', e.target.value)}
-                    >
-                      {Object.values(Operator).map(op => <option key={op} value={op}>{op}</option>)}
-                    </select>
-                 </div>
-
-                 <div className="w-20">
-                    <div className="text-[10px] text-slate-500 uppercase font-bold mb-1">Value</div>
-                    <input
-                      type="number"
-                      step="0.1"
-                      className="w-full bg-slate-900 text-white text-xs rounded p-2 border border-slate-700 focus:outline-none focus:border-brand-500"
-                      value={criterion.value}
-                      onChange={(e) => updateCriteria(criterion.id, 'value', parseFloat(e.target.value))}
+        {/* Main Workspace */}
+        <div className="flex-1 flex overflow-hidden">
+          
+          {/* LEFT: Builder Canvas */}
+          <div className="flex-1 flex flex-col border-r border-slate-800 bg-slate-950/30">
+            
+            {/* 1. Configuration Panel */}
+            <div className="p-6 border-b border-slate-800 space-y-6">
+               <div className="grid grid-cols-2 gap-6">
+                 <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 block">Strategy Name</label>
+                    <input 
+                      type="text" 
+                      value={name} 
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="e.g. Late Goal Hunter"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:border-brand-500 focus:outline-none"
                     />
                  </div>
-
-                 <button 
-                   onClick={() => removeCriteria(criterion.id)}
-                   className="ml-2 text-slate-600 hover:text-red-400 p-2 rounded hover:bg-red-400/10 transition-colors self-end mb-0.5"
-                 >
-                   <Trash2 size={16} />
-                 </button>
+                 <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 block">Target Outcome</label>
+                    <select 
+                      value={targetOutcome}
+                      onChange={(e) => setTargetOutcome(e.target.value as TargetOutcome)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:border-brand-500 focus:outline-none cursor-pointer appearance-none"
+                    >
+                      {Object.entries(OUTCOME_GROUPS).map(([group, outcomes]) => (
+                        <optgroup key={group} label={group}>
+                          {outcomes.map(o => <option key={o} value={o}>{o}</option>)}
+                        </optgroup>
+                      ))}
+                    </select>
+                 </div>
                </div>
-             ))}
-           </div>
-        </div>
-      </div>
 
-      <div className="p-4 border-t border-slate-800 bg-slate-800/30">
-        <div className="flex gap-2 mb-3">
-             <Info size={16} className="text-blue-400 shrink-0 mt-0.5" />
-             <p className="text-[10px] text-blue-200/70 leading-relaxed">
-                Alerts trigger only when <strong>ALL</strong> conditions (Live & Pre-Match) are met. <br/>
-                <span className="text-orange-400">Note:</span> If a stat is unavailable (N/A) for a match, it will be skipped by the alert engine.
-             </p>
-        </div>
-        <div className="flex justify-end gap-3">
-          <button 
-            onClick={onCancel}
-            className="px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-white transition-colors"
-          >
-            Discard
-          </button>
-          <button 
-            onClick={handleSave}
-            className="px-6 py-2.5 bg-brand-500 hover:bg-brand-400 text-slate-900 font-bold rounded-lg shadow-lg shadow-brand-900/20 flex items-center gap-2 transition-all transform hover:-translate-y-0.5"
-          >
-            <Save size={18} /> Save Strategy
-          </button>
+               {/* Marketplace Options */}
+               <div className="bg-slate-900 rounded-xl p-4 border border-slate-800">
+                  <div className="flex justify-between items-center mb-4">
+                     <h3 className="text-xs font-bold text-white uppercase flex items-center gap-2"><Globe size={14} /> Marketplace Settings</h3>
+                     <label className="flex items-center gap-2 cursor-pointer">
+                        <span className="text-xs text-slate-400">Publish to Market</span>
+                        <input type="checkbox" checked={isPublic} onChange={e => setIsPublic(e.target.checked)} className="accent-brand-500" />
+                     </label>
+                  </div>
+                  
+                  {isPublic && (
+                    <div className="flex items-center gap-4 animate-in slide-in-from-top-2">
+                       <div className="flex-1">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Price ($)</label>
+                          <div className="relative">
+                             <DollarSign size={14} className="absolute left-3 top-3 text-slate-500" />
+                             <input 
+                               type="number" 
+                               min="0"
+                               max="100"
+                               value={price}
+                               onChange={(e) => setPrice(Number(e.target.value))}
+                               disabled={isTrial}
+                               className={`w-full bg-slate-950 border border-slate-700 rounded-lg py-2 pl-8 pr-4 text-white focus:border-brand-500 focus:outline-none ${isTrial ? 'opacity-50 cursor-not-allowed' : ''}`}
+                             />
+                          </div>
+                          {isTrial && (
+                             <div className="text-[10px] text-orange-400 mt-1 flex items-center gap-1">
+                                <Lock size={10} /> Trial users can only publish Free strategies.
+                             </div>
+                          )}
+                       </div>
+                       <div className="flex-1">
+                          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Platform Fee</div>
+                          <div className="text-sm font-bold text-slate-300">15% per sale</div>
+                       </div>
+                    </div>
+                  )}
+               </div>
+            </div>
+
+            {/* 2. Logic Stack (Scrollable) */}
+            <div className="flex-1 overflow-y-auto p-6 custom-scrollbar relative">
+               <div className="absolute top-0 left-6 bottom-0 w-px bg-slate-800/50"></div>
+               
+               {criteriaList.length === 0 ? (
+                 <div className="h-full flex flex-col items-center justify-center text-slate-600 border-2 border-dashed border-slate-800 rounded-xl m-4">
+                    <Filter className="opacity-20 mb-2" size={40} />
+                    <p className="text-sm">No conditions added.</p>
+                    <p className="text-xs">Select a metric from the right panel to begin.</p>
+                 </div>
+               ) : (
+                 <div className="space-y-4">
+                   {criteriaList.map((criterion, idx) => {
+                     const config = getInputConfig(criterion.metric);
+                     const isPreMatch = criterion.metric.startsWith('Pre');
+                     return (
+                       <div key={criterion.id} className="relative pl-8 group animate-in slide-in-from-left-2 duration-300">
+                         {/* Connector Dot */}
+                         <div className="absolute left-[21px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-slate-800 border border-slate-600 z-10 group-hover:bg-brand-500 group-hover:border-brand-400 transition-colors"></div>
+                         
+                         <div className={`glass-card p-4 rounded-xl flex items-center gap-4 transition-all hover:border-brand-500/30 ${isPreMatch ? 'border-l-4 border-l-indigo-500' : 'border-l-4 border-l-brand-500'}`}>
+                            <div className="flex-1">
+                               <div className="flex items-center gap-2 mb-1">
+                                  <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${isPreMatch ? 'bg-indigo-500/10 text-indigo-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
+                                    {isPreMatch ? 'Pre-Match' : 'Live'}
+                                  </span>
+                               </div>
+                               <div className="font-medium text-white text-sm">{criterion.metric}</div>
+                            </div>
+
+                            <div className="flex items-center gap-2 bg-slate-950 rounded-lg p-1 border border-slate-800">
+                               <select 
+                                 value={criterion.operator}
+                                 onChange={(e) => updateCriteria(criterion.id, 'operator', e.target.value)}
+                                 className="bg-transparent text-brand-400 font-bold text-sm text-center focus:outline-none cursor-pointer w-10"
+                               >
+                                 {Object.values(Operator).map(op => <option key={op} value={op}>{op}</option>)}
+                               </select>
+                               <div className="w-px h-4 bg-slate-800"></div>
+                               <div className="relative flex items-center">
+                                  {config.prefix && <span className="text-slate-500 text-xs font-bold pl-2">{config.prefix}</span>}
+                                  <input 
+                                    type="number" 
+                                    step={config.step}
+                                    value={criterion.value}
+                                    onChange={(e) => updateCriteria(criterion.id, 'value', parseFloat(e.target.value))}
+                                    className={`bg-transparent text-white font-mono text-sm focus:outline-none py-1 px-2 ${config.width} text-right`}
+                                  />
+                                  {config.suffix && <span className="text-slate-500 text-xs font-bold pr-2">{config.suffix}</span>}
+                               </div>
+                            </div>
+
+                            <button onClick={() => removeCriteria(criterion.id)} className="text-slate-600 hover:text-red-400 p-2 hover:bg-red-500/10 rounded-lg transition-colors">
+                               <Trash2 size={16} />
+                            </button>
+                         </div>
+                         
+                         {idx < criteriaList.length - 1 && (
+                            <div className="absolute left-8 -bottom-5 text-[10px] font-bold text-slate-600 bg-slate-900 px-1 z-10">AND</div>
+                         )}
+                       </div>
+                     );
+                   })}
+                 </div>
+               )}
+            </div>
+
+            {/* Summary Footer */}
+            <div className="p-4 bg-slate-900 border-t border-slate-800 text-xs text-slate-400 flex items-center gap-2">
+               <Info size={14} />
+               <span>Alert triggers when <strong>ALL</strong> conditions above are met simultaneously.</span>
+            </div>
+          </div>
+
+          {/* RIGHT: Metric Library */}
+          <div className="w-80 bg-slate-900 flex flex-col border-l border-slate-800">
+             <div className="p-4 border-b border-slate-800">
+                <h3 className="text-xs font-bold text-white uppercase tracking-widest mb-4">Add Condition</h3>
+                <div className="grid grid-cols-4 gap-2">
+                   {CATEGORIES.map(cat => (
+                     <button 
+                       key={cat.id}
+                       onClick={() => setSelectedCategory(cat.id)}
+                       className={`flex flex-col items-center justify-center p-2 rounded-lg transition-all ${selectedCategory === cat.id ? 'bg-slate-800 text-white ring-1 ring-slate-600' : 'text-slate-500 hover:bg-slate-800 hover:text-slate-300'}`}
+                       title={cat.label}
+                     >
+                        <cat.icon size={20} className={`mb-1 ${selectedCategory === cat.id ? cat.color : ''}`} />
+                     </button>
+                   ))}
+                </div>
+                <div className="mt-3 text-center text-xs font-bold text-slate-400">{CATEGORIES.find(c => c.id === selectedCategory)?.label}</div>
+             </div>
+             
+             <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
+                {METRIC_LIBRARY[selectedCategory].map(metric => (
+                   <button 
+                     key={metric}
+                     onClick={() => addCriteria(metric)}
+                     className="w-full text-left p-3 rounded-lg border border-slate-800 bg-slate-950/50 hover:bg-slate-800 hover:border-brand-500/30 group transition-all"
+                   >
+                      <div className="text-xs text-slate-300 font-medium group-hover:text-white">{metric}</div>
+                      <div className="flex justify-between items-center mt-1">
+                         <span className="text-[9px] text-slate-600 uppercase font-bold">{getInputConfig(metric).prefix ? 'Value' : 'Number'}</span>
+                         <Plus size={12} className="text-slate-600 group-hover:text-brand-400" />
+                      </div>
+                   </button>
+                ))}
+             </div>
+          </div>
+
         </div>
       </div>
     </div>

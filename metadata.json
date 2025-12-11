@@ -1,5 +1,5 @@
 {
-  "name": "BetScout AI",
+  "name": "FootAlert",
   "description": "Real-time football statistics tracker and alert system powered by Gemini AI.",
   "requestFramePermissions": [
     "microphone"
