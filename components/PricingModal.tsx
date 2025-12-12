@@ -1,9 +1,8 @@
 
-
 import React, { useState } from 'react';
 import { User } from '../types';
 import { Check, Shield, Zap, Star, Lock } from 'lucide-react';
-import { StripeCheckoutMock } from './StripeCheckoutMock';
+import { RealStripePayment } from './RealStripePayment';
 import { processSubscription } from '../services/paymentService';
 
 interface PricingModalProps {
@@ -32,7 +31,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({ user, onSuccess }) =
   if (showCheckout) {
     return (
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/90 backdrop-blur-xl p-4">
-        <StripeCheckoutMock 
+        <RealStripePayment 
            amount={plans[selectedPlan].price} 
            description={`FootAlert ${plans[selectedPlan].name}`}
            onSuccess={handlePaymentSuccess}

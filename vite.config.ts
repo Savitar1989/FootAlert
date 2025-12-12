@@ -11,12 +11,13 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [react()],
       define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+        // Shimming process.env for browser compatibility
+        'process.env': JSON.stringify(env),
+        'process.env.API_KEY': JSON.stringify(env.API_KEY || ''),
       },
       resolve: {
         alias: {
-          '@': path.resolve(__dirname, '.'),
+          '@': path.resolve('.'),
         }
       }
     };

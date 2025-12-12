@@ -1,7 +1,8 @@
 
-import React from 'react';
-import { BetTicket, TargetOutcome } from '../types';
-import { X, Clock, Target, Activity, DollarSign, Trophy } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { BetTicket, TargetOutcome, AlertStrategy } from '../types';
+import { db } from '../services/db';
+import { X, Clock, Target, Activity, DollarSign, Trophy, CheckCircle, AlertTriangle } from 'lucide-react';
 
 interface AlertDetailsModalProps {
   ticket: BetTicket;
@@ -9,8 +10,19 @@ interface AlertDetailsModalProps {
 }
 
 export const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({ ticket, onClose }) => {
+  const [strategy, setStrategy] = useState<AlertStrategy | null>(null);
   const stats = ticket.statsSnapshot;
   const preOdds = ticket.preMatchOdds;
+
+  useEffect(() => {
+    // Load the strategy definition to compare against stats
+    const loadStrat = async () => {
+       const all = await db.strategies.getAll();
+       const found = all.find(s => s.id === ticket.strategyId);
+       setStrategy(found || null);
+    };
+    loadStrat();
+  }, [ticket.strategyId]);
 
   // Helper for comparison bars
   const StatBar = ({ label, hVal, aVal }: { label: string, hVal: number | null, aVal: number | null }) => {
@@ -82,6 +94,27 @@ export const AlertDetailsModal: React.FC<AlertDetailsModalProps> = ({ ticket, on
                  <div className="text-sm font-bold text-white">{ticket.oddsAtTrigger}</div>
               </div>
            </div>
+
+           {/* Trigger Checklist (New Feature) */}
+           {strategy && (
+             <div className="mb-6">
+                <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-3 flex items-center gap-2">
+                   <CheckCircle size={12} className="text-emerald-400" /> Trigger Conditions Met
+                </h4>
+                <div className="bg-slate-950/50 rounded-xl border border-slate-800 p-2 space-y-1">
+                   {strategy.criteria.map(c => (
+                     <div key={c.id} className="flex justify-between items-center p-2 rounded hover:bg-white/5">
+                        <div className="text-xs text-slate-300">{c.metric}</div>
+                        <div className="flex items-center gap-2">
+                           <span className="text-[10px] text-slate-500 uppercase font-bold">Required:</span>
+                           <span className="text-xs font-mono font-bold text-brand-400">{c.operator} {c.value}</span>
+                           <CheckCircle size={12} className="text-emerald-500 ml-1" />
+                        </div>
+                     </div>
+                   ))}
+                </div>
+             </div>
+           )}
 
            {/* Stats Snapshot */}
            {stats ? (

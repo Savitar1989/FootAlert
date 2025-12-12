@@ -1,14 +1,14 @@
 
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AlertStrategy, CriteriaMetric, Operator, AlertCriteria, TargetOutcome } from '../types';
-import { Plus, Trash2, Save, X, Info, Clock, Goal, Activity, Shield, TrendingUp, History, DollarSign, Crosshair, Filter, Layers, Zap, Hash, Globe, Lock } from 'lucide-react';
+import { Plus, Trash2, Save, X, Info, Clock, Goal, Activity, Shield, TrendingUp, History, DollarSign, Crosshair, Filter, Layers, Zap, Hash, Globe, Lock, HelpCircle } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { getCurrentUser } from '../services/authService';
 
 interface StrategyBuilderProps {
   onSave: (strategy: AlertStrategy) => void;
   onCancel: () => void;
+  initialData?: AlertStrategy | null;
 }
 
 // Visual Helper for Metric Categories
@@ -60,6 +60,14 @@ const METRIC_LIBRARY: Record<string, CriteriaMetric[]> = {
   ]
 };
 
+const METRIC_TOOLTIPS: Record<string, string> = {
+  [CriteriaMetric.DA_TOTAL]: "Total Dangerous Attacks from both teams. High numbers indicate end-to-end action.",
+  [CriteriaMetric.XG_TOTAL]: "Expected Goals (Total). The quality of chances created. > 1.5 suggests goals are likely.",
+  [CriteriaMetric.PRE_PPG_HOME]: "Points Per Game (Home Team) this season. > 2.0 indicates a strong team.",
+  [CriteriaMetric.PRE_BTTS_HOME]: "Percentage of games where Home team scored AND conceded.",
+  [CriteriaMetric.ODDS_HOME_WIN]: "Current live decimal odds for Home Win.",
+};
+
 const OUTCOME_GROUPS = {
   'Match Winner': [TargetOutcome.HOME_WIN, TargetOutcome.DRAW, TargetOutcome.AWAY_WIN],
   'Goals (Over)': [TargetOutcome.OVER_0_5_GOALS, TargetOutcome.OVER_1_5_GOALS, TargetOutcome.OVER_2_5_GOALS, TargetOutcome.BTTS_YES],
@@ -68,20 +76,25 @@ const OUTCOME_GROUPS = {
   'Half Time': [TargetOutcome.HT_OVER_0_5, TargetOutcome.HT_HOME_WIN, TargetOutcome.HT_DRAW]
 };
 
-export const StrategyBuilder: React.FC<StrategyBuilderProps> = ({ onSave, onCancel }) => {
-  const [name, setName] = useState('');
-  const [targetOutcome, setTargetOutcome] = useState<TargetOutcome>(TargetOutcome.OVER_0_5_GOALS);
-  const [criteriaList, setCriteriaList] = useState<AlertCriteria[]>([
+export const StrategyBuilder: React.FC<StrategyBuilderProps> = ({ onSave, onCancel, initialData }) => {
+  const [name, setName] = useState(initialData?.name || '');
+  const [targetOutcome, setTargetOutcome] = useState<TargetOutcome>(initialData?.targetOutcome || TargetOutcome.OVER_0_5_GOALS);
+  const [criteriaList, setCriteriaList] = useState<AlertCriteria[]>(initialData?.criteria || [
     { id: uuidv4(), metric: CriteriaMetric.TIME, operator: Operator.GREATER_THAN, value: 70 },
   ]);
   const [selectedCategory, setSelectedCategory] = useState<string>('live_general');
   
   // Market Options
-  const [isPublic, setIsPublic] = useState(false);
-  const [price, setPrice] = useState(0);
+  const [isPublic, setIsPublic] = useState(initialData?.isPublic || false);
+  const [price, setPrice] = useState(initialData?.price || 0);
+  const [isFree, setIsFree] = useState((initialData?.price || 0) === 0);
+  const [description, setDescription] = useState(initialData?.description || '');
 
   const currentUser = getCurrentUser();
   const isTrial = currentUser?.subscription.plan === 'trial';
+
+  // If editing, use existing ID, else generate new
+  const strategyId = initialData?.id || uuidv4();
 
   const addCriteria = (metric: CriteriaMetric) => {
     let defaultValue = 0;
@@ -99,10 +112,25 @@ export const StrategyBuilder: React.FC<StrategyBuilderProps> = ({ onSave, onCanc
 
   const handleSave = () => {
     if (!name.trim()) return alert("Please name your strategy");
+    if (isPublic && !description.trim()) return alert("Please provide a description for the marketplace.");
+    
     onSave({
-      id: uuidv4(), userId: '', name, active: true, criteria: criteriaList, targetOutcome,
-      triggeredMatches: [], wins: 0, totalHits: 0, strikeRate: 0, avgOdds: 0,
-      isPublic, price
+      id: strategyId, 
+      userId: currentUser?.id || '', 
+      name, 
+      active: true, 
+      criteria: criteriaList, 
+      targetOutcome,
+      triggeredMatches: initialData?.triggeredMatches || [], 
+      wins: initialData?.wins || 0, 
+      totalHits: initialData?.totalHits || 0, 
+      strikeRate: initialData?.strikeRate || 0, 
+      avgOdds: initialData?.avgOdds || 0,
+      roi: initialData?.roi || 0,
+      history: initialData?.history || [],
+      isPublic, 
+      price: isFree ? 0 : price, 
+      description
     });
   };
 
@@ -124,14 +152,16 @@ export const StrategyBuilder: React.FC<StrategyBuilderProps> = ({ onSave, onCanc
                <Layers className="text-brand-400" size={24} />
              </div>
              <div>
-               <h2 className="text-lg font-bold text-white">Strategy Studio</h2>
-               <p className="text-xs text-slate-400">Build your automated betting algorithm</p>
+               <h2 className="text-lg font-bold text-white">{initialData ? 'Edit Strategy' : 'Strategy Studio'}</h2>
+               <p className="text-xs text-slate-400">
+                 {initialData ? `Refining "${initialData.name}"` : 'Build your automated betting algorithm'}
+               </p>
              </div>
           </div>
           <div className="flex gap-3">
              <button onClick={onCancel} className="px-4 py-2 text-slate-400 hover:text-white text-xs font-bold uppercase tracking-wider">Discard</button>
              <button onClick={handleSave} className="px-6 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold uppercase tracking-wider rounded-lg shadow-lg shadow-brand-500/20 flex items-center gap-2">
-               <Save size={16} /> Save Strategy
+               <Save size={16} /> {initialData ? 'Update Strategy' : 'Save Strategy'}
              </button>
           </div>
         </div>
@@ -182,30 +212,46 @@ export const StrategyBuilder: React.FC<StrategyBuilderProps> = ({ onSave, onCanc
                   </div>
                   
                   {isPublic && (
-                    <div className="flex items-center gap-4 animate-in slide-in-from-top-2">
-                       <div className="flex-1">
-                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Price ($)</label>
-                          <div className="relative">
-                             <DollarSign size={14} className="absolute left-3 top-3 text-slate-500" />
-                             <input 
-                               type="number" 
-                               min="0"
-                               max="100"
-                               value={price}
-                               onChange={(e) => setPrice(Number(e.target.value))}
-                               disabled={isTrial}
-                               className={`w-full bg-slate-950 border border-slate-700 rounded-lg py-2 pl-8 pr-4 text-white focus:border-brand-500 focus:outline-none ${isTrial ? 'opacity-50 cursor-not-allowed' : ''}`}
-                             />
-                          </div>
-                          {isTrial && (
-                             <div className="text-[10px] text-orange-400 mt-1 flex items-center gap-1">
-                                <Lock size={10} /> Trial users can only publish Free strategies.
-                             </div>
-                          )}
+                    <div className="space-y-4 animate-in slide-in-from-top-2">
+                       <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Short Description</label>
+                          <input 
+                             type="text"
+                             value={description}
+                             onChange={e => setDescription(e.target.value)}
+                             placeholder="E.g. Targets matches with high momentum after 70'..."
+                             className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+                          />
                        </div>
-                       <div className="flex-1">
-                          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Platform Fee</div>
-                          <div className="text-sm font-bold text-slate-300">15% per sale</div>
+
+                       <div className="flex items-start gap-6">
+                          <div className="flex-1">
+                             <div className="flex items-center justify-between mb-2">
+                                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Pricing Strategy</label>
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={isFree} 
+                                    onChange={e => { setIsFree(e.target.checked); if(e.target.checked) setPrice(0); }} 
+                                    className="accent-brand-500" 
+                                  />
+                                  <span className="text-xs font-bold text-emerald-400">List for Free</span>
+                                </label>
+                             </div>
+                             
+                             <div className="relative">
+                                <DollarSign size={14} className={`absolute left-3 top-3 ${isFree ? 'text-slate-600' : 'text-slate-500'}`} />
+                                <input 
+                                  type="number" 
+                                  min="0"
+                                  max="100"
+                                  value={price}
+                                  onChange={(e) => { setPrice(Number(e.target.value)); setIsFree(Number(e.target.value) === 0); }}
+                                  disabled={isTrial || isFree}
+                                  className={`w-full bg-slate-950 border border-slate-700 rounded-lg py-2 pl-8 pr-4 text-white focus:border-brand-500 focus:outline-none ${isTrial || isFree ? 'opacity-50' : ''}`}
+                                />
+                             </div>
+                          </div>
                        </div>
                     </div>
                   )}
@@ -310,9 +356,16 @@ export const StrategyBuilder: React.FC<StrategyBuilderProps> = ({ onSave, onCanc
                    <button 
                      key={metric}
                      onClick={() => addCriteria(metric)}
-                     className="w-full text-left p-3 rounded-lg border border-slate-800 bg-slate-950/50 hover:bg-slate-800 hover:border-brand-500/30 group transition-all"
+                     className="w-full text-left p-3 rounded-lg border border-slate-800 bg-slate-950/50 hover:bg-slate-800 hover:border-brand-500/30 group transition-all relative"
                    >
-                      <div className="text-xs text-slate-300 font-medium group-hover:text-white">{metric}</div>
+                      <div className="text-xs text-slate-300 font-medium group-hover:text-white pr-4">{metric}</div>
+                      
+                      {METRIC_TOOLTIPS[metric] && (
+                         <div className="absolute right-2 top-2 text-slate-600 hover:text-brand-400" title={METRIC_TOOLTIPS[metric]}>
+                            <HelpCircle size={12} />
+                         </div>
+                      )}
+
                       <div className="flex justify-between items-center mt-1">
                          <span className="text-[9px] text-slate-600 uppercase font-bold">{getInputConfig(metric).prefix ? 'Value' : 'Number'}</span>
                          <Plus size={12} className="text-slate-600 group-hover:text-brand-400" />

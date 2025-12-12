@@ -1,10 +1,16 @@
 
-
 export type MatchStatus = 'Scheduled' | 'Live' | 'HT' | 'FT' | 'PST' | 'AET' | 'PEN';
 
 export type UserRole = 'user' | 'admin';
 
 export type SubscriptionPlan = 'trial' | 'weekly' | 'monthly';
+
+export interface NotificationPreferences {
+  email: boolean;
+  push: boolean;
+  sound: boolean;
+  telegram: boolean;
+}
 
 export interface User {
   id: string;
@@ -14,6 +20,17 @@ export interface User {
   createdAt: number;
   lastLogin?: number;
   
+  // Profile
+  avatar?: string;
+  bio?: string;
+
+  // Settings
+  preferences: NotificationPreferences;
+
+  // Security
+  twoFactorEnabled: boolean;
+  isBanned?: boolean;
+
   // New Economy Fields
   walletBalance: number;
   subscription: {
@@ -21,6 +38,38 @@ export interface User {
     status: 'active' | 'expired';
     expiryDate: number;
   };
+}
+
+export interface GlobalSettings {
+  siteName: string;
+  maintenanceMode: boolean;
+  
+  // External APIs
+  apiFootballKey: string;
+  sportMonksToken: string;
+  oddsApiKey: string;
+  geminiApiKey: string;
+  
+  // Payment Gateways
+  stripePublishableKey: string;
+  stripeSecretKey: string;
+  currencyCode: string;
+  
+  // Email Service
+  smtpHost: string;
+  smtpPort: number;
+  smtpUser: string;
+  smtpFrom: string;
+}
+
+export interface AuditLog {
+  id: string;
+  adminId: string;
+  action: string;
+  targetId?: string;
+  details: string;
+  timestamp: number;
+  ip?: string;
 }
 
 export interface ToastMessage {
@@ -175,6 +224,14 @@ export enum CriteriaMetric {
   PRE_FAILED_SCORE_HOME = 'Pre: Failed to Score % (Home)',
   PRE_FAILED_SCORE_AWAY = 'Pre: Failed to Score % (Away)',
 
+  PRE_BTTS_HOME = 'Pre: BTTS % (Home)',
+  PRE_BTTS_AWAY = 'Pre: BTTS % (Away)',
+  PRE_BTTS_ANY = 'Pre: BTTS % (ANY)', 
+
+  PRE_OVER25_HOME = 'Pre: Over 2.5 % (Home)',
+  PRE_OVER25_AWAY = 'Pre: Over 2.5 % (Away)',
+  PRE_OVER25_ANY = 'Pre: Over 2.5 % (ANY)',
+  
   PRE_AVG_1ST_HALF_GOALS_FOR_HOME = 'Pre: Avg 1H Goals For (Home)',
   PRE_AVG_1ST_HALF_GOALS_FOR_AWAY = 'Pre: Avg 1H Goals For (Away)',
   PRE_AVG_1ST_HALF_GOALS_FOR_ANY = 'Pre: Avg 1H Goals For (ANY)',
@@ -197,14 +254,6 @@ export enum CriteriaMetric {
   PRE_AVG_CORNERS_HOME = 'Pre: Avg Corners (Home)',
   PRE_AVG_CORNERS_AWAY = 'Pre: Avg Corners (Away)',
   PRE_AVG_CORNERS_ANY = 'Pre: Avg Corners (ANY)', 
-
-  PRE_BTTS_HOME = 'Pre: BTTS % (Home)',
-  PRE_BTTS_AWAY = 'Pre: BTTS % (Away)',
-  PRE_BTTS_ANY = 'Pre: BTTS % (ANY)', 
-
-  PRE_OVER25_HOME = 'Pre: Over 2.5 % (Home)',
-  PRE_OVER25_AWAY = 'Pre: Over 2.5 % (Away)',
-  PRE_OVER25_ANY = 'Pre: Over 2.5 % (ANY)' 
 }
 
 export enum Operator {
@@ -300,6 +349,7 @@ export interface AlertStrategy {
   // Market Logic
   isPublic?: boolean;
   price?: number; // 0 = Free
+  description?: string;
 }
 
 export interface MarketStrategy extends AlertStrategy {
@@ -320,9 +370,14 @@ export interface NotificationLog {
   read: boolean;
 }
 
+export type DataProvider = 'api-football' | 'sportmonks';
+
 export interface ApiSettings {
   userId: string;
-  apiKey: string;
+  apiKey: string; // API-Football Key
+  sportMonksApiKey?: string; // SportMonks API Token
+  oddsApiKey?: string; // The Odds API Key
+  primaryProvider: DataProvider;
   refreshRate: number; 
   useDemoData: boolean;
 }
@@ -339,7 +394,7 @@ export interface SystemStats {
 export interface Transaction {
   id: string;
   userId: string;
-  type: 'subscription' | 'purchase' | 'sale';
+  type: 'subscription' | 'purchase' | 'sale' | 'deposit' | 'withdrawal';
   amount: number;
   description: string;
   date: number;

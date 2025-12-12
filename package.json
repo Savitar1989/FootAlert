@@ -11,9 +11,14 @@
   "dependencies": {
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
-    "lucide-react": "^0.556.0",
-    "@google/genai": "^1.31.0",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "lucide-react": "^0.560.0",
+    "@google/genai": "^1.33.0",
+    "path": "^0.12.7",
+    "vite": "^7.2.7",
+    "@vitejs/plugin-react": "^5.1.2",
+    "@stripe/stripe-js": "^4.1.0",
+    "@stripe/react-stripe-js": "^2.7.3"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

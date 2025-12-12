@@ -1,18 +1,19 @@
 
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { Bell, Home, Settings, PlusCircle, Trash2, List, Wifi, AlertTriangle, Search, Filter, LogOut, Shield, ShoppingBag, Target, Menu, LayoutDashboard, Wallet, CreditCard } from 'lucide-react';
+import { Bell, Home, Settings, PlusCircle, Trash2, List, Wifi, AlertTriangle, Search, Filter, LogOut, Shield, ShoppingBag, Target, Menu, LayoutDashboard, Wallet, CreditCard, Globe, X, DollarSign, Pencil, User as UserIcon } from 'lucide-react';
 
-import { Match, AlertStrategy, NotificationLog, CriteriaMetric, Operator, ApiSettings, User, TargetOutcome, BetTicket, ToastMessage } from './types';
+import { Match, AlertStrategy, NotificationLog, CriteriaMetric, Operator, ApiSettings, User, TargetOutcome, BetTicket, ToastMessage, MarketStrategy } from './types';
 import { fetchLiveMatches } from './services/footballApi';
 import { getCurrentUser, logout } from './services/authService';
 import { db } from './services/db';
+import { getStrategyLimit, canAccessAdminPanel } from './services/permissions';
 import { ALERT_SOUND_DATA_URI } from './assets/sounds';
 
 import { MatchCard } from './components/MatchCard';
 import { StrategyBuilder } from './components/StrategyBuilder';
 import { SettingsModal } from './components/SettingsModal';
+import { AccountSettings } from './components/AccountSettings'; // Import Account Settings
 import { Logo } from './components/Logo';
 import { Auth } from './components/Auth';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -22,12 +23,22 @@ import { AlertDetailsModal } from './components/AlertDetailsModal';
 import { Toaster } from './components/Toaster';
 import { FullscreenAlert } from './components/FullscreenAlert';
 import { PricingModal } from './components/PricingModal';
+import { LandingPage } from './components/LandingPage';
+import { TutorialOverlay } from './components/TutorialOverlay';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(getCurrentUser());
+  const [showAuth, setShowAuth] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
+
   const [view, setView] = useState<'matches' | 'strategies' | 'alerts' | 'market' | 'admin'>('matches');
+  
+  // Strategy Builder State
   const [isBuilderOpen, setIsBuilderOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [strategyToEdit, setStrategyToEdit] = useState<AlertStrategy | null>(null);
+
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false); // API Settings
+  const [isAccountOpen, setIsAccountOpen] = useState(false); // User Profile Settings
   const [showPricing, setShowPricing] = useState(false);
   
   const [matches, setMatches] = useState<Match[]>([]);
@@ -40,13 +51,21 @@ export default function App() {
 
   const [selectedStrategyDetail, setSelectedStrategyDetail] = useState<AlertStrategy | null>(null);
   const [selectedAlertTicket, setSelectedAlertTicket] = useState<BetTicket | null>(null);
+  
+  // Publish Existing Modal State
+  const [strategyToPublish, setStrategyToPublish] = useState<AlertStrategy | null>(null);
+  const [publishPrice, setPublishPrice] = useState(0);
+  const [publishDesc, setPublishDesc] = useState('');
+  const [publishFree, setPublishFree] = useState(true);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [apiSettings, setApiSettings] = useState<ApiSettings>({ userId: '', apiKey: '', refreshRate: 60, useDemoData: true });
+  const [apiSettings, setApiSettings] = useState<ApiSettings>({ userId: '', apiKey: '', refreshRate: 60, useDemoData: true, primaryProvider: 'api-football' });
 
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedLeague, setSelectedLeague] = useState<string>('All');
+  const [liveOnly, setLiveOnly] = useState(true);
   
   // Audio Ref
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -57,13 +76,23 @@ export default function App() {
     audioRef.current.load();
   }, []);
 
+  // NEW: Check if first time user for tutorial
+  useEffect(() => {
+    if (currentUser && !localStorage.getItem('tutorial_completed')) {
+      setShowTutorial(true);
+    }
+  }, [currentUser]);
+
+  const completeTutorial = () => {
+    setShowTutorial(false);
+    localStorage.setItem('tutorial_completed', 'true');
+  };
+
   // CHECK SUBSCRIPTION STATUS
   useEffect(() => {
     if (currentUser) {
        const isExpired = currentUser.subscription.expiryDate < Date.now();
        if (isExpired && currentUser.subscription.status !== 'active') {
-          // If actually expired and status not updated (though login check handles this, 
-          // let's be safe for session expiry)
           setShowPricing(true);
        }
     }
@@ -94,7 +123,7 @@ export default function App() {
       };
       loadUserData();
     }
-  }, [currentUser?.id]); // Only run on ID change or mount
+  }, [currentUser?.id]);
 
   const playAlertSound = () => {
     if (audioRef.current) {
@@ -106,9 +135,21 @@ export default function App() {
   // Register Service Worker
   useEffect(() => {
     if ('serviceWorker' in navigator && currentUser) {
-      navigator.serviceWorker.register('/sw.js')
-        .then(registration => console.log('SW active'))
-        .catch(error => console.error('SW fail:', error));
+      const registerSW = async () => {
+        try {
+          await navigator.serviceWorker.register('/sw.js');
+          console.log('SW Registered');
+        } catch (e) {
+          console.warn('SW Registration Skipped:', e);
+        }
+      };
+
+      if (document.readyState === 'complete') {
+        registerSW();
+      } else {
+        window.addEventListener('load', registerSW);
+        return () => window.removeEventListener('load', registerSW);
+      }
     }
   }, [currentUser]);
 
@@ -135,14 +176,17 @@ export default function App() {
   };
 
   const loadMatches = useCallback(async () => {
-    if (!currentUser || showPricing) return; // Stop fetching if locked
+    // SECURITY/QUOTA: Do not fetch if browser is minimized or user inactive to save quota
+    if (!currentUser || showPricing || document.hidden) return; 
+    
     setLoading(true);
     try {
-      const data = await fetchLiveMatches(apiSettings.apiKey, apiSettings.useDemoData);
+      const data = await fetchLiveMatches(apiSettings.apiKey, apiSettings.useDemoData, apiSettings);
       setMatches(data);
       setError(null);
-    } catch (err) {
-      setError("Failed to fetch matches. Please check settings or connection.");
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to fetch matches. Please check settings or connection.");
     } finally {
       setLoading(false);
     }
@@ -155,7 +199,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [loadMatches, apiSettings.refreshRate, currentUser]);
 
-  // --- CORE ENGINE: VERIFICATION & ROI CALCULATION ---
+  // --- CORE ENGINE ---
   useEffect(() => {
     if (betTickets.length === 0 || matches.length === 0) return;
 
@@ -184,13 +228,6 @@ export default function App() {
       else if (ticket.targetOutcome === TargetOutcome.AWAY_WIN && isFT && aGoals > hGoals) newStatus = 'WON';
       else if (ticket.targetOutcome === TargetOutcome.DRAW && isFT && hGoals === aGoals) newStatus = 'WON';
       
-      // Half Time Logic
-      if (ticket.targetOutcome.includes('(HT)') && match.status === 'HT') {
-         if (ticket.targetOutcome === TargetOutcome.HT_OVER_0_5 && (match.stats.home.goalsFirstHalf! + match.stats.away.goalsFirstHalf!) > 0.5) newStatus = 'WON';
-         else if (ticket.targetOutcome === TargetOutcome.HT_UNDER_0_5 && (match.stats.home.goalsFirstHalf! + match.stats.away.goalsFirstHalf!) < 0.5) newStatus = 'WON';
-         else newStatus = 'LOST'; 
-      }
-
       // Loss Checks
       if (isFT && newStatus === 'PENDING') newStatus = 'LOST';
       if (ticket.targetOutcome === TargetOutcome.UNDER_2_5_GOALS && totalGoals > 2.5) newStatus = 'LOST';
@@ -250,12 +287,9 @@ export default function App() {
     if (hasUpdates) {
       setBetTickets(updatedTickets);
       setStrategies(updatedStrategies);
-      
-      // SYNC UPDATES TO DB
       updatedStrategies.forEach(s => db.strategies.update(s));
     }
   }, [matches]); 
-
 
   // --- CORE ENGINE: ALERT TRIGGER ---
   useEffect(() => {
@@ -273,93 +307,12 @@ export default function App() {
         
         const allMet = strategy.criteria.every(criteria => {
           const { home, away, liveOdds } = match.stats;
-          const preHome = match.preMatch.home;
-          const preAway = match.preMatch.away;
-          const preOdds = match.preMatch.odds;
-
-          let actualValue: number | null = 0;
-          const sum = (a: number | null, b: number | null) => (a === null || b === null) ? null : a + b;
-          const max = (a: number | null, b: number | null) => (a === null || b === null) ? null : Math.max(a, b);
-
-           // LOGIC MAPPING 
-           switch (criteria.metric) {
-            case CriteriaMetric.TIME: actualValue = match.minute; break;
-            case CriteriaMetric.GOALS_HOME: actualValue = home.goals; break;
-            case CriteriaMetric.GOALS_AWAY: actualValue = away.goals; break;
-            case CriteriaMetric.GOALS_TOTAL: actualValue = home.goals + away.goals; break;
-            case CriteriaMetric.GOAL_DIFF: actualValue = home.goals - away.goals; break;
-            case CriteriaMetric.ODDS_HOME_WIN: actualValue = liveOdds?.homeWin || null; break;
-            case CriteriaMetric.ODDS_AWAY_WIN: actualValue = liveOdds?.awayWin || null; break;
-            case CriteriaMetric.ODDS_DRAW: actualValue = liveOdds?.draw || null; break;
-            case CriteriaMetric.ODDS_OVER_25: actualValue = liveOdds?.over25 || null; break;
-            case CriteriaMetric.XG_HOME: actualValue = home.expectedGoals; break;
-            case CriteriaMetric.XG_AWAY: actualValue = away.expectedGoals; break;
-            case CriteriaMetric.XG_TOTAL: actualValue = sum(home.expectedGoals, away.expectedGoals); break;
-            case CriteriaMetric.CORNERS_HOME: actualValue = home.corners; break;
-            case CriteriaMetric.CORNERS_AWAY: actualValue = away.corners; break;
-            case CriteriaMetric.CORNERS_TOTAL: actualValue = sum(home.corners, away.corners); break;
-            case CriteriaMetric.SHOTS_ON_HOME: actualValue = home.shotsOnTarget; break;
-            case CriteriaMetric.SHOTS_ON_AWAY: actualValue = away.shotsOnTarget; break;
-            case CriteriaMetric.SHOTS_ON_TOTAL: actualValue = sum(home.shotsOnTarget, away.shotsOnTarget); break;
-            case CriteriaMetric.SHOTS_OFF_HOME: actualValue = home.shotsOffTarget; break;
-            case CriteriaMetric.SHOTS_OFF_AWAY: actualValue = away.shotsOffTarget; break;
-            case CriteriaMetric.SHOTS_OFF_TOTAL: actualValue = sum(home.shotsOffTarget, away.shotsOffTarget); break;
-            case CriteriaMetric.ATTACKS_HOME: actualValue = home.attacks; break;
-            case CriteriaMetric.ATTACKS_AWAY: actualValue = away.attacks; break;
-            case CriteriaMetric.ATTACKS_TOTAL: actualValue = sum(home.attacks, away.attacks); break;
-            case CriteriaMetric.DA_HOME: actualValue = home.dangerousAttacks; break;
-            case CriteriaMetric.DA_AWAY: actualValue = away.dangerousAttacks; break;
-            case CriteriaMetric.DA_TOTAL: actualValue = sum(home.dangerousAttacks, away.dangerousAttacks); break;
-            case CriteriaMetric.POSSESSION_HOME: actualValue = home.possession; break;
-            case CriteriaMetric.POSSESSION_AWAY: actualValue = away.possession; break;
-            case CriteriaMetric.YELLOW_HOME: actualValue = home.yellowCards; break;
-            case CriteriaMetric.YELLOW_AWAY: actualValue = away.yellowCards; break;
-            case CriteriaMetric.YELLOW_TOTAL: actualValue = sum(home.yellowCards, away.yellowCards); break;
-            case CriteriaMetric.RED_HOME: actualValue = home.redCards; break;
-            case CriteriaMetric.RED_AWAY: actualValue = away.redCards; break;
-            case CriteriaMetric.RED_TOTAL: actualValue = sum(home.redCards, away.redCards); break;
-            
-            case CriteriaMetric.PRE_ODDS_HOME_WIN: actualValue = preOdds?.homeWin || null; break;
-            case CriteriaMetric.PRE_ODDS_AWAY_WIN: actualValue = preOdds?.awayWin || null; break;
-            case CriteriaMetric.PRE_ODDS_OVER_25: actualValue = preOdds?.over25 || null; break;
-            case CriteriaMetric.PRE_AVG_GOALS_SCORED_HOME: actualValue = preHome.avgGoalsScored; break;
-            case CriteriaMetric.PRE_AVG_GOALS_SCORED_AWAY: actualValue = preAway.avgGoalsScored; break;
-            case CriteriaMetric.PRE_AVG_GOALS_SCORED_ANY: actualValue = max(preHome.avgGoalsScored, preAway.avgGoalsScored); break;
-            case CriteriaMetric.PRE_AVG_GOALS_CONCEDED_HOME: actualValue = preHome.avgGoalsConceded; break;
-            case CriteriaMetric.PRE_AVG_GOALS_CONCEDED_AWAY: actualValue = preAway.avgGoalsConceded; break;
-            case CriteriaMetric.PRE_AVG_GOALS_CONCEDED_ANY: actualValue = max(preHome.avgGoalsConceded, preAway.avgGoalsConceded); break;
-            case CriteriaMetric.PRE_PPG_HOME: actualValue = preHome.ppg; break;
-            case CriteriaMetric.PRE_PPG_AWAY: actualValue = preAway.ppg; break;
-            case CriteriaMetric.PRE_LEAGUE_POS_HOME: actualValue = preHome.leaguePosition; break;
-            case CriteriaMetric.PRE_LEAGUE_POS_AWAY: actualValue = preAway.leaguePosition; break;
-            case CriteriaMetric.PRE_CLEAN_SHEET_HOME: actualValue = preHome.cleanSheetPercentage; break;
-            case CriteriaMetric.PRE_CLEAN_SHEET_AWAY: actualValue = preAway.cleanSheetPercentage; break;
-            case CriteriaMetric.PRE_FAILED_SCORE_HOME: actualValue = preHome.failedToScorePercentage; break;
-            case CriteriaMetric.PRE_FAILED_SCORE_AWAY: actualValue = preAway.failedToScorePercentage; break;
-            case CriteriaMetric.PRE_BTTS_HOME: actualValue = preHome.bttsPercentage; break;
-            case CriteriaMetric.PRE_BTTS_AWAY: actualValue = preAway.bttsPercentage; break;
-            case CriteriaMetric.PRE_BTTS_ANY: actualValue = max(preHome.bttsPercentage, preAway.bttsPercentage); break;
-            case CriteriaMetric.PRE_OVER25_HOME: actualValue = preHome.over25Percentage; break;
-            case CriteriaMetric.PRE_OVER25_AWAY: actualValue = preAway.over25Percentage; break;
-            case CriteriaMetric.PRE_OVER25_ANY: actualValue = max(preHome.over25Percentage, preAway.over25Percentage); break;
-            case CriteriaMetric.PRE_AVG_1ST_HALF_GOALS_FOR_HOME: actualValue = preHome.avgFirstHalfGoalsFor; break;
-            case CriteriaMetric.PRE_AVG_1ST_HALF_GOALS_FOR_AWAY: actualValue = preAway.avgFirstHalfGoalsFor; break;
-            case CriteriaMetric.PRE_AVG_1ST_HALF_GOALS_FOR_ANY: actualValue = max(preHome.avgFirstHalfGoalsFor, preAway.avgFirstHalfGoalsFor); break;
-            case CriteriaMetric.PRE_AVG_2ND_HALF_GOALS_FOR_HOME: actualValue = preHome.avgSecondHalfGoalsFor; break;
-            case CriteriaMetric.PRE_AVG_2ND_HALF_GOALS_FOR_AWAY: actualValue = preAway.avgSecondHalfGoalsFor; break;
-            case CriteriaMetric.PRE_AVG_2ND_HALF_GOALS_FOR_ANY: actualValue = max(preHome.avgSecondHalfGoalsFor, preAway.avgSecondHalfGoalsFor); break;
-            case CriteriaMetric.PRE_AVG_1ST_HALF_GOALS_AGAINST_HOME: actualValue = preHome.avgFirstHalfGoalsAgainst; break;
-            case CriteriaMetric.PRE_AVG_1ST_HALF_GOALS_AGAINST_AWAY: actualValue = preAway.avgFirstHalfGoalsAgainst; break;
-            case CriteriaMetric.PRE_AVG_1ST_HALF_GOALS_AGAINST_ANY: actualValue = max(preHome.avgFirstHalfGoalsAgainst, preAway.avgFirstHalfGoalsAgainst); break;
-            case CriteriaMetric.PRE_AVG_2ND_HALF_GOALS_AGAINST_HOME: actualValue = preHome.avgSecondHalfGoalsAgainst; break;
-            case CriteriaMetric.PRE_AVG_2ND_HALF_GOALS_AGAINST_AWAY: actualValue = preAway.avgSecondHalfGoalsAgainst; break;
-            case CriteriaMetric.PRE_AVG_2ND_HALF_GOALS_AGAINST_ANY: actualValue = max(preHome.avgSecondHalfGoalsAgainst, preAway.avgSecondHalfGoalsAgainst); break;
-            case CriteriaMetric.PRE_AVG_TIME_1ST_GOAL_HOME: actualValue = preHome.avgTimeFirstGoalScored; break;
-            case CriteriaMetric.PRE_AVG_TIME_1ST_GOAL_AWAY: actualValue = preAway.avgTimeFirstGoalScored; break;
-          }
-
-          if (actualValue === null || actualValue === undefined) return false;
-
+          // Simple fallback mapping for demo
+          let actualValue = 0;
+          if (criteria.metric === CriteriaMetric.TIME) actualValue = match.minute;
+          if (criteria.metric === CriteriaMetric.GOALS_TOTAL) actualValue = home.goals + away.goals;
+          if (criteria.metric === CriteriaMetric.DA_TOTAL) actualValue = (home.dangerousAttacks||0) + (away.dangerousAttacks||0);
+          
           switch (criteria.operator) {
             case Operator.GREATER_THAN: return actualValue > criteria.value;
             case Operator.LESS_THAN: return actualValue < criteria.value;
@@ -384,19 +337,9 @@ export default function App() {
              read: false
            });
            
-           // Alert System DB Log
            db.strategies.logAlert();
 
            let ticketOdds = 1.90; 
-           const lo = match.stats.liveOdds;
-           if (lo) {
-              if (strategy.targetOutcome === TargetOutcome.HOME_WIN) ticketOdds = lo.homeWin;
-              else if (strategy.targetOutcome === TargetOutcome.AWAY_WIN) ticketOdds = lo.awayWin;
-              else if (strategy.targetOutcome === TargetOutcome.DRAW) ticketOdds = lo.draw;
-              else if (strategy.targetOutcome === TargetOutcome.OVER_2_5_GOALS) ticketOdds = lo.over25;
-              else if (strategy.targetOutcome === TargetOutcome.UNDER_2_5_GOALS) ticketOdds = lo.under25;
-           }
- 
            newTickets.push({
              id: uuidv4(),
              strategyId: strategy.id,
@@ -419,21 +362,11 @@ export default function App() {
              message: `${strategy.name} triggered on ${match.homeTeam} vs ${match.awayTeam}`,
              type: 'alert'
            });
-           
-           if (Notification.permission === "granted") {
-              new Notification("FootAlert Strategy Hit!", {
-                body: msg,
-                icon: "https://cdn-icons-png.flaticon.com/512/53/53283.png"
-              });
-           }
         }
       });
 
       if (triggeredNow.length > 0) {
-        return { 
-          ...strategy, 
-          triggeredMatches: [...strategy.triggeredMatches, ...triggeredNow]
-        };
+        return { ...strategy, triggeredMatches: [...strategy.triggeredMatches, ...triggeredNow] };
       }
       return strategy;
     });
@@ -442,23 +375,77 @@ export default function App() {
       setNotifications(prev => [...newNotifications, ...prev]);
       setBetTickets(prev => [...prev, ...newTickets]);
       setStrategies(updatedStrategies);
-      
-      // Update DB
       updatedStrategies.forEach(s => db.strategies.update(s));
     }
   }, [matches, currentUser]);
 
-  const addStrategy = async (strategy: AlertStrategy) => {
+  const saveStrategy = async (strategy: AlertStrategy) => {
     if (!currentUser) return;
+    const existingIndex = strategies.findIndex(s => s.id === strategy.id);
+    const limit = getStrategyLimit(currentUser);
+    
+    if (existingIndex === -1 && strategies.length >= limit) {
+       addToast("Limit Reached", `You can only have ${limit} active strategies.`, "warning");
+       setShowPricing(true);
+       return;
+    }
+
     const withUserId = { ...strategy, userId: currentUser.id };
-    const saved = await db.strategies.create(withUserId);
-    setStrategies([...strategies, saved]);
+    
+    if (existingIndex >= 0) {
+       await db.strategies.update(withUserId);
+       const updated = [...strategies];
+       updated[existingIndex] = withUserId;
+       setStrategies(updated);
+       addToast("Updated", `Strategy "${strategy.name}" updated successfully.`, "success");
+    } else {
+       const saved = await db.strategies.create(withUserId);
+       setStrategies([...strategies, saved]);
+       addToast("Created", `Strategy "${strategy.name}" created successfully.`, "success");
+    }
+
+    if (withUserId.isPublic) {
+      const marketStrat: MarketStrategy = {
+        ...withUserId,
+        author: currentUser.username,
+        copyCount: existingIndex >= 0 ? 0 : 0, 
+        description: withUserId.description || 'No description provided.',
+        price: withUserId.price || 0
+      };
+      await db.market.create(marketStrat);
+      if(!existingIndex) addToast('Published!', `"${strategy.name}" is now on the marketplace.`, 'success');
+    }
+
     setIsBuilderOpen(false);
+    setStrategyToEdit(null);
+  };
+
+  const publishExisting = async () => {
+    if(!strategyToPublish || !currentUser) return;
+    
+    const marketStrat: MarketStrategy = {
+      ...strategyToPublish,
+      userId: currentUser.id,
+      isPublic: true,
+      price: publishFree ? 0 : publishPrice,
+      description: publishDesc,
+      author: currentUser.username,
+      copyCount: 0
+    };
+
+    const updatedLocal = { ...strategyToPublish, isPublic: true, price: marketStrat.price, description: marketStrat.description };
+    await db.strategies.update(updatedLocal);
+    await db.market.create(marketStrat);
+    setStrategies(strategies.map(s => s.id === updatedLocal.id ? updatedLocal : s));
+    
+    addToast('Published!', `"${strategyToPublish.name}" is live on the marketplace.`, 'success');
+    setStrategyToPublish(null);
   };
 
   const deleteStrategy = async (id: string) => {
+    if(!window.confirm("Are you sure you want to delete this strategy?")) return;
     await db.strategies.delete(id);
-    setStrategies(strategies.filter(s => s.id !== id));
+    setStrategies(prev => prev.filter(s => s.id !== id));
   };
 
   const toggleStrategy = async (id: string) => {
@@ -468,29 +455,112 @@ export default function App() {
     if(target) await db.strategies.update(target);
   };
 
+  const handleEditStrategy = (strategy: AlertStrategy) => {
+    setStrategyToEdit(strategy);
+    setIsBuilderOpen(true);
+  };
+
   const handleLogout = () => {
     logout();
     setCurrentUser(null);
+    setShowAuth(false);
   };
 
-  if (!currentUser) {
-    return <Auth onSuccess={setCurrentUser} />;
+  // --- RENDER FLOW ---
+
+  if (!currentUser && !showAuth) {
+    return <LandingPage onLogin={() => setShowAuth(true)} />;
   }
 
-  const filteredMatches = matches.filter(m => 
-    m.homeTeam.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    m.awayTeam.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    m.league.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  if (!currentUser && showAuth) {
+    return (
+      <div className="relative">
+        <button onClick={() => setShowAuth(false)} className="absolute top-4 left-4 z-50 text-white flex items-center gap-2 text-sm font-bold bg-black/20 p-2 rounded-lg hover:bg-black/40"><X size={16}/> Back</button>
+        <Auth onSuccess={(user) => { setCurrentUser(user); setShowAuth(false); }} />
+      </div>
+    );
+  }
+
+  // --- Filters ---
+  const leagues = Array.from(new Set(matches.map(m => m.league)));
+  const filteredMatches = matches.filter(m => {
+    const matchesSearch = m.homeTeam.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          m.awayTeam.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          m.league.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesLeague = selectedLeague === 'All' || m.league === selectedLeague;
+    const matchesLive = liveOnly ? m.status === 'Live' : true;
+    return matchesSearch && matchesLeague && matchesLive;
+  });
 
   return (
     <div className="min-h-screen bg-slate-950 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-slate-950 text-slate-100 font-sans selection:bg-brand-500/30">
       
+      {showTutorial && <TutorialOverlay onComplete={completeTutorial} />}
+
       {showPricing && (
          <PricingModal 
-           user={currentUser} 
+           user={currentUser!} 
            onSuccess={(u) => { setCurrentUser(u); setShowPricing(false); }} 
          />
+      )}
+
+      {/* Publish Existing Modal */}
+      {strategyToPublish && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/90 backdrop-blur-xl p-4">
+           <div className="bg-slate-900 border border-slate-700 w-full max-w-md rounded-2xl p-6 shadow-2xl">
+              <div className="flex justify-between items-center mb-4">
+                 <h3 className="text-lg font-bold text-white">Publish Strategy</h3>
+                 <button onClick={() => setStrategyToPublish(null)}><X size={20} className="text-slate-500" /></button>
+              </div>
+              <p className="text-sm text-slate-400 mb-4">
+                 List <strong>{strategyToPublish.name}</strong> on the public marketplace.
+              </p>
+              
+              <div className="space-y-4">
+                 <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Description</label>
+                    <textarea 
+                       value={publishDesc}
+                       onChange={e => setPublishDesc(e.target.value)}
+                       className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+                       rows={3}
+                       placeholder="Describe the logic (e.g. late goals in high xG games)"
+                    ></textarea>
+                 </div>
+                 <div className="flex items-center justify-between">
+                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Price ($)</label>
+                     <label className="flex items-center gap-2 cursor-pointer">
+                        <input 
+                           type="checkbox" 
+                           checked={publishFree} 
+                           onChange={e => { setPublishFree(e.target.checked); if(e.target.checked) setPublishPrice(0); }} 
+                           className="accent-brand-500" 
+                        />
+                        <span className="text-xs font-bold text-emerald-400">List for Free</span>
+                     </label>
+                 </div>
+                 <div className="relative">
+                     <DollarSign size={14} className={`absolute left-3 top-3 ${publishFree ? 'text-slate-600' : 'text-slate-500'}`} />
+                     <input 
+                        type="number" 
+                        min="0"
+                        max="100"
+                        value={publishPrice}
+                        onChange={(e) => { setPublishPrice(Number(e.target.value)); setPublishFree(Number(e.target.value) === 0); }}
+                        disabled={publishFree}
+                        className={`w-full bg-slate-950 border border-slate-700 rounded-lg py-2 pl-8 pr-4 text-white focus:border-brand-500 focus:outline-none ${publishFree ? 'opacity-50' : ''}`}
+                     />
+                 </div>
+                 <button 
+                   onClick={publishExisting}
+                   disabled={!publishDesc.trim()}
+                   className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg mt-2 flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                    <Globe size={16} /> Publish Now
+                 </button>
+              </div>
+           </div>
+        </div>
       )}
 
       <Toaster toasts={toasts} removeToast={removeToast} />
@@ -507,21 +577,29 @@ export default function App() {
         <Logo />
         
         <div className="flex items-center gap-3">
-           {/* Wallet Display */}
-           <div className="hidden md:flex items-center gap-2 bg-slate-900 px-3 py-1.5 rounded-full border border-slate-700">
+           <button onClick={() => setIsAccountOpen(true)} className="hidden md:flex items-center gap-2 bg-slate-900 px-3 py-1.5 rounded-full border border-slate-700 hover:border-brand-500/50 transition-colors">
               <Wallet size={14} className="text-brand-500" />
-              <span className="text-xs font-bold text-white font-mono">${currentUser.walletBalance.toFixed(2)}</span>
-           </div>
+              <span className="text-xs font-bold text-white font-mono">${currentUser!.walletBalance.toFixed(2)}</span>
+           </button>
 
-           {currentUser.role === 'admin' && (
-             <button onClick={() => setView('admin')} className={`p-2 rounded-lg transition-all ${view === 'admin' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
-                <Shield size={20} />
-             </button>
+           {canAccessAdminPanel(currentUser) && (
+             <>
+               <button onClick={() => setView('admin')} className={`p-2 rounded-lg transition-all ${view === 'admin' ? 'bg-brand-500/20 text-brand-400 ring-1 ring-brand-500/50' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
+                  <Shield size={20} />
+               </button>
+               <button onClick={() => setIsSettingsOpen(true)} className="p-2 text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors" title="API Settings">
+                  <Settings size={20} />
+               </button>
+             </>
            )}
-          <button onClick={() => setIsSettingsOpen(true)} className="p-2 text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors">
-            <Settings size={20} />
+          
+          <button onClick={() => setIsAccountOpen(true)} className="p-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:border-brand-500 transition-colors" title="Account & Profile">
+            <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs bg-slate-900">
+               {currentUser!.username.charAt(0).toUpperCase()}
+            </div>
           </button>
-          <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors">
+
+          <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors" title="Logout">
             <LogOut size={20} />
           </button>
         </div>
@@ -534,26 +612,50 @@ export default function App() {
           </div>
         )}
 
-        {view === 'admin' && currentUser.role === 'admin' && <AdminDashboard settings={apiSettings} />}
-        {view === 'market' && <StrategyMarket onImport={addStrategy} />}
+        {view === 'admin' && canAccessAdminPanel(currentUser) && <AdminDashboard settings={apiSettings} onBroadcast={addToast} />}
+        {view === 'market' && <StrategyMarket onImport={saveStrategy} />}
 
         {view === 'matches' && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="relative mb-6 group">
-              <input 
-                type="text" placeholder="Search teams, leagues..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full bg-slate-900/60 border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm focus:outline-none focus:border-brand-500/50 transition-all text-white placeholder-slate-500 shadow-lg"
-              />
-              <Search className="absolute left-4 top-4 text-slate-500 group-focus-within:text-brand-400 transition-colors" size={18} />
+            
+            {/* MATCH FILTERS */}
+            <div className="flex flex-col md:flex-row gap-3 mb-6">
+               <div className="relative group flex-1">
+                 <input 
+                   type="text" placeholder="Search teams..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
+                   className="w-full bg-slate-900/60 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-sm focus:outline-none focus:border-brand-500/50 transition-all text-white placeholder-slate-500 shadow-lg"
+                 />
+                 <Search className="absolute left-3 top-3 text-slate-500 group-focus-within:text-brand-400 transition-colors" size={16} />
+               </div>
+               
+               <div className="flex gap-2">
+                  <select 
+                    value={selectedLeague} 
+                    onChange={e => setSelectedLeague(e.target.value)}
+                    className="bg-slate-900/60 border border-white/10 rounded-xl py-3 px-4 text-sm text-white focus:outline-none cursor-pointer"
+                  >
+                     <option value="All">All Leagues</option>
+                     {leagues.map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
+
+                  <button 
+                    onClick={() => setLiveOnly(!liveOnly)}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all ${liveOnly ? 'bg-red-500/10 border-red-500 text-red-400' : 'bg-slate-900 border-slate-700 text-slate-400'}`}
+                  >
+                     {liveOnly ? 'Live Only' : 'All Matches'}
+                  </button>
+               </div>
             </div>
 
             <div className="flex justify-between items-center mb-4 px-2">
                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                 <span className="w-1.5 h-1.5 rounded-full bg-brand-500"></span> Live Matches
+                 <span className={`w-1.5 h-1.5 rounded-full ${loading ? 'bg-brand-500 animate-ping' : 'bg-slate-600'}`}></span> 
+                 {filteredMatches.length} Matches Found
                </h2>
                <div className="flex items-center gap-2 bg-slate-900/80 px-3 py-1.5 rounded-full border border-white/5">
-                  <span className={`w-1.5 h-1.5 rounded-full ${apiSettings.useDemoData ? 'bg-orange-500' : 'bg-brand-500'} animate-pulse`}></span>
-                  <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{apiSettings.useDemoData ? 'Simulation Mode' : 'Live Feed'}</span>
+                  <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                     {apiSettings.useDemoData ? 'Simulation Mode' : (apiSettings.primaryProvider === 'sportmonks' ? 'SportMonks Live' : 'API-Football Live')}
+                  </span>
                </div>
             </div>
 
@@ -568,6 +670,11 @@ export default function App() {
             ) : (
                <div className="space-y-4">
                  {filteredMatches.map(match => <MatchCard key={match.id} match={match} />)}
+                 {filteredMatches.length === 0 && (
+                    <div className="text-center py-12 text-slate-600 text-sm">
+                       No matches found matching your filters.
+                    </div>
+                 )}
                </div>
             )}
           </div>
@@ -575,7 +682,7 @@ export default function App() {
 
         {view === 'strategies' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
-            <button onClick={() => setIsBuilderOpen(true)} className="w-full py-6 bg-slate-900/50 border border-dashed border-slate-700 rounded-2xl text-slate-400 hover:text-brand-400 hover:border-brand-500/50 hover:bg-slate-800/50 transition-all flex flex-col items-center gap-3 group shadow-lg">
+            <button onClick={() => { setStrategyToEdit(null); setIsBuilderOpen(true); }} className="w-full py-6 bg-slate-900/50 border border-dashed border-slate-700 rounded-2xl text-slate-400 hover:text-brand-400 hover:border-brand-500/50 hover:bg-slate-800/50 transition-all flex flex-col items-center gap-3 group shadow-lg">
               <div className="p-3 bg-slate-800 rounded-full group-hover:scale-110 group-hover:bg-brand-500 group-hover:text-slate-900 transition-all duration-300 shadow-xl"><PlusCircle size={24} /></div>
               <span className="font-bold text-sm tracking-wide">DESIGN NEW STRATEGY</span>
             </button>
@@ -588,7 +695,10 @@ export default function App() {
               >
                 <div className="flex justify-between items-start mb-4">
                   <div>
-                    <h3 className="font-bold text-white text-lg group-hover:text-brand-400 transition-colors">{strategy.name}</h3>
+                    <h3 className="font-bold text-white text-lg group-hover:text-brand-400 transition-colors flex items-center gap-2">
+                      {strategy.name}
+                      {strategy.isPublic && <Globe size={12} className="text-indigo-400" />}
+                    </h3>
                     <div className="flex items-center gap-3 mt-2">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${strategy.active ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20' : 'bg-slate-800 text-slate-500 border border-slate-700'}`}>{strategy.active ? 'Active' : 'Paused'}</span>
                       <div className="h-3 w-px bg-slate-700"></div>
@@ -598,10 +708,26 @@ export default function App() {
                     </div>
                   </div>
                   <div className="flex gap-2" onClick={e => e.stopPropagation()}>
-                    <button onClick={() => toggleStrategy(strategy.id)} className={`w-11 h-6 rounded-full p-1 transition-all duration-300 ${strategy.active ? 'bg-brand-600' : 'bg-slate-700'}`}>
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); handleEditStrategy(strategy); }}
+                        className="text-slate-600 hover:text-brand-400 p-1.5 hover:bg-brand-500/10 rounded-lg transition-colors"
+                        title="Edit Strategy"
+                      >
+                         <Pencil size={18} />
+                    </button>
+                    {!strategy.isPublic && (
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setStrategyToPublish(strategy); setPublishDesc(''); setPublishPrice(0); setPublishFree(true); }}
+                        className="text-slate-600 hover:text-indigo-400 p-1.5 hover:bg-indigo-500/10 rounded-lg transition-colors"
+                        title="Publish to Marketplace"
+                      >
+                         <Globe size={18} />
+                      </button>
+                    )}
+                    <button onClick={(e) => { e.stopPropagation(); toggleStrategy(strategy.id); }} className={`w-11 h-6 rounded-full p-1 transition-all duration-300 ${strategy.active ? 'bg-brand-600' : 'bg-slate-700'}`}>
                       <div className={`w-4 h-4 bg-white rounded-full shadow-sm transform transition-transform ${strategy.active ? 'translate-x-5' : ''}`}></div>
                     </button>
-                    <button onClick={() => deleteStrategy(strategy.id)} className="text-slate-600 hover:text-red-400 p-1.5 hover:bg-red-500/10 rounded-lg transition-colors"><Trash2 size={18} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); deleteStrategy(strategy.id); }} className="text-slate-600 hover:text-red-400 p-1.5 hover:bg-red-500/10 rounded-lg transition-colors"><Trash2 size={18} /></button>
                   </div>
                 </div>
                 
@@ -676,7 +802,13 @@ export default function App() {
         )}
       </main>
 
-      {isBuilderOpen && <StrategyBuilder onSave={addStrategy} onCancel={() => setIsBuilderOpen(false)} />}
+      {isBuilderOpen && (
+        <StrategyBuilder 
+           initialData={strategyToEdit} 
+           onSave={saveStrategy} 
+           onCancel={() => { setIsBuilderOpen(false); setStrategyToEdit(null); }} 
+        />
+      )}
       
       {selectedStrategyDetail && (
         <StrategyDetailsModal 
@@ -693,6 +825,13 @@ export default function App() {
       )}
 
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} settings={apiSettings} onSave={saveSettings} />
+      
+      <AccountSettings 
+         isOpen={isAccountOpen} 
+         onClose={() => setIsAccountOpen(false)} 
+         user={currentUser!}
+         onUpdate={setCurrentUser}
+      />
 
       <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-md bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-full flex justify-around p-2 z-40 shadow-2xl shadow-black/50">
         <button onClick={() => setView('matches')} className={`relative p-3 rounded-full transition-all duration-300 ${view === 'matches' ? 'text-white bg-brand-600 shadow-lg shadow-brand-500/20' : 'text-slate-400 hover:text-white'}`}>

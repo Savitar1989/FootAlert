@@ -1,9 +1,26 @@
+
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
-    <title>FootAlert - Pro Scout</title>
+    <title>FootAlert - Pro Live Football Strategy Automator</title>
+    <meta name="description" content="Beat the bookies with AI-powered real-time football alerts. Create strategies, track live stats, and automate your betting analysis." />
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://footalert.app/" />
+    <meta property="og:title" content="FootAlert - Pro Football Strategy Automator" />
+    <meta property="og:description" content="Real-time xG, pressure index, and automated strategy alerts for professional sports bettors." />
+    <meta property="og:image" content="https://images.unsplash.com/photo-1555862124-a4ebf08b3e91?auto=format&fit=crop&w=1200&q=80" />
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:url" content="https://footalert.app/" />
+    <meta property="twitter:title" content="FootAlert - Pro Football Strategy Automator" />
+    <meta property="twitter:description" content="Real-time xG, pressure index, and automated strategy alerts for professional sports bettors." />
+    <meta property="twitter:image" content="https://images.unsplash.com/photo-1555862124-a4ebf08b3e91?auto=format&fit=crop&w=1200&q=80" />
+
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -96,20 +113,27 @@
       ::-webkit-scrollbar-track { background: transparent; }
       ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
     </style>
+    <link rel="stylesheet" href="/index.css">
   <script type="importmap">
 {
   "imports": {
-    "react/": "https://aistudiocdn.com/react@^19.2.1/",
-    "react": "https://aistudiocdn.com/react@^19.2.1",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.556.0",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.31.0",
-    "uuid": "https://aistudiocdn.com/uuid@^13.0.0"
+    "react": "https://esm.sh/react@^19.2.1",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.1/",
+    "react/": "https://esm.sh/react@^19.2.1/",
+    "uuid": "https://esm.sh/uuid@^13.0.0",
+    "lucide-react": "https://esm.sh/lucide-react@^0.560.0",
+    "@google/genai": "https://esm.sh/@google/genai@^1.33.0",
+    "path": "https://esm.sh/path@^0.12.7",
+    "vite": "https://esm.sh/vite@^7.2.7",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
+    "@stripe/stripe-js": "https://esm.sh/@stripe/stripe-js@^4.1.0",
+    "@stripe/react-stripe-js": "https://esm.sh/@stripe/react-stripe-js@^2.7.3"
   }
 }
 </script>
 </head>
   <body>
     <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
   </body>
 </html>

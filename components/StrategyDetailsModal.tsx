@@ -1,6 +1,7 @@
+
 import React, { useState } from 'react';
 import { AlertStrategy, MarketStrategy } from '../types';
-import { X, TrendingUp, Target, Activity, Clock, Layers, History, DollarSign } from 'lucide-react';
+import { X, TrendingUp, Target, Activity, Clock, Layers, History, DollarSign, Download } from 'lucide-react';
 
 interface StrategyDetailsModalProps {
   strategy: AlertStrategy | MarketStrategy;
@@ -13,6 +14,35 @@ export const StrategyDetailsModal: React.FC<StrategyDetailsModalProps> = ({ stra
 
   const history = strategy.history || [];
   const marketStrat = isMarket ? (strategy as MarketStrategy) : null;
+
+  const handleExportCSV = () => {
+    if (history.length === 0) return;
+    
+    // Create CSV content
+    const headers = ['Match', 'Home', 'Away', 'Trigger Time', 'Target', 'Odds', 'Score', 'Result'];
+    const rows = history.map(h => [
+      `${h.homeTeam} vs ${h.awayTeam}`,
+      h.homeTeam,
+      h.awayTeam,
+      new Date(h.triggerTime).toLocaleString(),
+      h.targetOutcome,
+      h.oddsAtTrigger,
+      `${h.initialScore.home}-${h.initialScore.away}`,
+      h.status
+    ]);
+    
+    const csvContent = "data:text/csv;charset=utf-8," 
+      + headers.join(",") + "\n" 
+      + rows.map(e => e.join(",")).join("\n");
+      
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `${strategy.name.replace(/\s+/g, '_')}_history.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
@@ -79,7 +109,7 @@ export const StrategyDetailsModal: React.FC<StrategyDetailsModalProps> = ({ stra
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 bg-slate-950/20 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-6 bg-slate-950/20 custom-scrollbar relative">
            
            {activeTab === 'overview' && (
              <div className="space-y-6 animate-in slide-in-from-bottom-2 fade-in">
@@ -114,6 +144,16 @@ export const StrategyDetailsModal: React.FC<StrategyDetailsModalProps> = ({ stra
 
            {activeTab === 'history' && (
              <div className="animate-in slide-in-from-bottom-2 fade-in">
+                <div className="flex justify-end mb-4">
+                   <button 
+                     onClick={handleExportCSV}
+                     disabled={history.length === 0}
+                     className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-lg transition-colors disabled:opacity-50"
+                   >
+                      <Download size={14} /> Export CSV
+                   </button>
+                </div>
+
                 {history.length === 0 ? (
                    <div className="text-center py-12 text-slate-600 border border-dashed border-slate-800 rounded-xl">
                       <History size={32} className="mx-auto mb-3 opacity-30" />
