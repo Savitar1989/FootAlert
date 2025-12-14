@@ -1,6 +1,6 @@
 
-import React, { useState } from 'react';
-import { X, Key, Save, AlertTriangle, Shield, Bell, Zap, Database, DollarSign } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Key, Save, AlertTriangle, Shield, Bell, Zap, Database, DollarSign, Cloud, Check, Loader2 } from 'lucide-react';
 import { ApiSettings } from '../types';
 
 interface SettingsModalProps {
@@ -12,8 +12,42 @@ interface SettingsModalProps {
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings, onSave }) => {
   const [localSettings, setLocalSettings] = useState<ApiSettings>(settings);
-  const [showDevOptions, setShowDevOptions] = useState(false);
-  const [activeTab, setActiveTab] = useState<'general' | 'providers'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'providers' | 'cloud'>('general');
+  
+  // Cloud State
+  const [cloudUrl, setCloudUrl] = useState('');
+  const [cloudKey, setCloudKey] = useState('');
+  const [cloudEnabled, setCloudEnabled] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState<'disconnected' | 'connected'>('disconnected');
+
+  useEffect(() => {
+    // Load Cloud Config
+    const stored = localStorage.getItem('footalert_cloud_config');
+    if (stored) {
+      const config = JSON.parse(stored);
+      setCloudUrl(config.url || '');
+      setCloudKey(config.key || '');
+      setCloudEnabled(config.enabled || false);
+      if (config.enabled && config.url) setCloudStatus('connected');
+    }
+  }, [isOpen]);
+
+  const handleSaveCloud = () => {
+    const config = { enabled: cloudEnabled, url: cloudUrl, key: cloudKey };
+    localStorage.setItem('footalert_cloud_config', JSON.stringify(config));
+    alert("Cloud settings saved. The application will reload to apply the new database connection.");
+    window.location.reload();
+  };
+
+  const disconnectCloud = () => {
+    localStorage.removeItem('footalert_cloud_config');
+    setCloudEnabled(false);
+    setCloudUrl('');
+    setCloudKey('');
+    setCloudStatus('disconnected');
+    alert("Disconnected from cloud. Switched back to Local Storage.");
+    window.location.reload();
+  };
 
   if (!isOpen) return null;
 
@@ -44,6 +78,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
              className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-all ${activeTab === 'providers' ? 'text-white bg-white/5 border-b-2 border-brand-500' : 'text-slate-500 hover:text-slate-300'}`}
            >
              Data Providers
+           </button>
+           <button 
+             onClick={() => setActiveTab('cloud')}
+             className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-all ${activeTab === 'cloud' ? 'text-white bg-white/5 border-b-2 border-brand-500' : 'text-slate-500 hover:text-slate-300'}`}
+           >
+             Cloud Sync
            </button>
         </div>
 
@@ -176,16 +216,80 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
                </div>
             </div>
           )}
+
+          {activeTab === 'cloud' && (
+             <div className="space-y-6">
+                <div className={`p-4 rounded-xl border flex items-center gap-4 ${cloudStatus === 'connected' ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-slate-900 border-slate-800'}`}>
+                   <div className={`p-3 rounded-full ${cloudStatus === 'connected' ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-500'}`}>
+                      <Cloud size={24} />
+                   </div>
+                   <div>
+                      <div className="font-bold text-white text-sm">{cloudStatus === 'connected' ? 'Connected to Supabase' : 'Offline / Local Storage'}</div>
+                      <div className="text-xs text-slate-400">{cloudStatus === 'connected' ? 'Your strategies are syncing to the cloud.' : 'Strategies are saved to this device only.'}</div>
+                   </div>
+                </div>
+
+                <div className="space-y-4">
+                   <div className="flex items-center justify-between">
+                      <label className="text-sm font-bold text-white">Enable Cloud Database</label>
+                      <button 
+                        onClick={() => setCloudEnabled(!cloudEnabled)}
+                        className={`w-12 h-6 rounded-full p-1 transition-colors duration-300 ${cloudEnabled ? 'bg-brand-500' : 'bg-slate-700'}`}
+                      >
+                         <div className={`w-4 h-4 bg-white rounded-full shadow-sm transform transition-transform ${cloudEnabled ? 'translate-x-6' : ''}`}></div>
+                      </button>
+                   </div>
+
+                   {cloudEnabled && (
+                      <div className="space-y-4 animate-in slide-in-from-top-2">
+                         <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Supabase Project URL</label>
+                            <input 
+                              type="text" 
+                              value={cloudUrl} 
+                              onChange={e => setCloudUrl(e.target.value)} 
+                              placeholder="https://xyz.supabase.co"
+                              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white text-xs font-mono focus:border-brand-500 focus:outline-none"
+                            />
+                         </div>
+                         <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Supabase Anon Key</label>
+                            <input 
+                              type="password" 
+                              value={cloudKey} 
+                              onChange={e => setCloudKey(e.target.value)} 
+                              placeholder="eyJhbGciOiJIUzI1NiIsInR..."
+                              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white text-xs font-mono focus:border-brand-500 focus:outline-none"
+                            />
+                         </div>
+                         
+                         <div className="flex gap-2">
+                            <button onClick={handleSaveCloud} className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-lg flex items-center justify-center gap-2">
+                               <Check size={14} /> Connect & Reload
+                            </button>
+                            {cloudStatus === 'connected' && (
+                               <button onClick={disconnectCloud} className="px-4 py-2 bg-slate-800 hover:bg-red-900/50 text-slate-300 hover:text-red-400 text-xs font-bold rounded-lg border border-slate-700">
+                                  Disconnect
+                               </button>
+                            )}
+                         </div>
+                      </div>
+                   )}
+                </div>
+             </div>
+          )}
         </div>
 
-        <div className="p-5 border-t border-white/5 bg-white/5 flex justify-end">
-          <button
-            onClick={() => { onSave(localSettings); onClose(); }}
-            className="flex items-center gap-2 px-6 py-2.5 bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs uppercase tracking-wider rounded-lg transition-all shadow-lg shadow-brand-500/20"
-          >
-            <Save size={16} /> Save Changes
-          </button>
-        </div>
+        {activeTab !== 'cloud' && (
+          <div className="p-5 border-t border-white/5 bg-white/5 flex justify-end">
+            <button
+              onClick={() => { onSave(localSettings); onClose(); }}
+              className="flex items-center gap-2 px-6 py-2.5 bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs uppercase tracking-wider rounded-lg transition-all shadow-lg shadow-brand-500/20"
+            >
+              <Save size={16} /> Save Changes
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

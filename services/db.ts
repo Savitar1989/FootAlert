@@ -2,8 +2,36 @@
 import { User, AlertStrategy, ApiSettings, SystemStats, TargetOutcome, CriteriaMetric, Operator, Transaction, MarketStrategy, AuditLog, GlobalSettings } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import { MOCK_MARKET_STRATEGIES } from '../constants';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// KEYS
+// --- CONFIGURATION ---
+const CLOUD_CONFIG_KEY = 'footalert_cloud_config';
+
+interface CloudConfig {
+  enabled: boolean;
+  url: string;
+  key: string;
+}
+
+const getCloudConfig = (): CloudConfig | null => {
+  const stored = localStorage.getItem(CLOUD_CONFIG_KEY);
+  return stored ? JSON.parse(stored) : null;
+};
+
+// --- INITIALIZE SUPABASE ---
+let supabase: SupabaseClient | null = null;
+const cloudConfig = getCloudConfig();
+
+if (cloudConfig && cloudConfig.enabled && cloudConfig.url && cloudConfig.key) {
+  try {
+    supabase = createClient(cloudConfig.url, cloudConfig.key);
+    console.log("🔌 Connected to Supabase Cloud DB");
+  } catch (e) {
+    console.error("Failed to initialize Supabase", e);
+  }
+}
+
+// --- LOCAL STORAGE KEYS ---
 const DB_USERS = 'footalert_db_users';
 const DB_STRATEGIES = 'footalert_db_strategies';
 const DB_MARKET = 'footalert_db_market'; 
@@ -13,7 +41,7 @@ const DB_STATS = 'footalert_db_stats';
 const DB_TRANSACTIONS = 'footalert_db_transactions';
 const DB_AUDIT = 'footalert_db_audit';
 
-// DEFAULT DATA
+// --- DEFAULTS ---
 const DEFAULT_STRATEGY_TEMPLATE: Omit<AlertStrategy, 'id' | 'userId'> = {
   name: 'Late Goal Hunter (Default)',
   active: true,
@@ -50,12 +78,15 @@ const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
   smtpFrom: 'noreply@footalert.com'
 };
 
-// INITIALIZATION
-const initDB = () => {
+// --- HELPERS ---
+const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+const load = <T>(key: string): T => JSON.parse(localStorage.getItem(key) || '[]');
+const save = (key: string, data: any) => localStorage.setItem(key, JSON.stringify(data));
+
+// --- INIT LOCAL DATA ---
+const initLocalDB = () => {
   if (!localStorage.getItem(DB_USERS)) {
-    // Admin password "admin" hashed with SHA-256
     const adminHash = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"; 
-    
     const admin: User = {
       id: 'admin-1',
       username: 'admin',
@@ -66,185 +97,178 @@ const initDB = () => {
       twoFactorEnabled: false,
       subscription: { plan: 'monthly', status: 'active', expiryDate: 9999999999999 },
       preferences: { email: true, push: true, sound: true, telegram: false },
-      passwordHash: adminHash // Added property for local auth check
-    } as any; // Cast to any to allow passwordHash for local db auth logic
+      passwordHash: adminHash
+    } as any;
     localStorage.setItem(DB_USERS, JSON.stringify([admin]));
   }
   if (!localStorage.getItem(DB_STRATEGIES)) localStorage.setItem(DB_STRATEGIES, JSON.stringify([]));
   if (!localStorage.getItem(DB_MARKET)) localStorage.setItem(DB_MARKET, JSON.stringify(MOCK_MARKET_STRATEGIES));
-  
   if (!localStorage.getItem(DB_SETTINGS)) localStorage.setItem(DB_SETTINGS, JSON.stringify([]));
   if (!localStorage.getItem(DB_GLOBAL_SETTINGS)) localStorage.setItem(DB_GLOBAL_SETTINGS, JSON.stringify(DEFAULT_GLOBAL_SETTINGS));
   if (!localStorage.getItem(DB_TRANSACTIONS)) localStorage.setItem(DB_TRANSACTIONS, JSON.stringify([]));
   if (!localStorage.getItem(DB_AUDIT)) localStorage.setItem(DB_AUDIT, JSON.stringify([]));
   if (!localStorage.getItem(DB_STATS)) {
-    const stats: SystemStats = {
-      totalUsers: 1,
-      totalStrategies: 0,
-      totalAlertsSent: 14502,
-      serverLoad: 12,
-      globalRoi: 5.4,
-      traffic: Array.from({length: 7}, () => Math.floor(Math.random() * 500 + 100))
-    };
-    localStorage.setItem(DB_STATS, JSON.stringify(stats));
+    localStorage.setItem(DB_STATS, JSON.stringify({
+      totalUsers: 1, totalStrategies: 0, totalAlertsSent: 14502, serverLoad: 12, globalRoi: 5.4, traffic: Array(7).fill(0).map(()=>Math.random()*500)
+    }));
   }
 };
 
-initDB();
+initLocalDB();
 
-// HELPERS
-const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
-const load = <T>(key: string): T => JSON.parse(localStorage.getItem(key) || '[]');
-const save = (key: string, data: any) => localStorage.setItem(key, JSON.stringify(data));
-
+// --- DATABASE SERVICE ---
 export const db = {
+  get isCloud() { return !!supabase; },
+
   users: {
     getAll: async (): Promise<User[]> => {
+      if (supabase) {
+        const { data, error } = await supabase.from('users').select('*');
+        if (!error && data) return data as unknown as User[];
+      }
       await delay(200);
       return load<User[]>(DB_USERS);
     },
     getById: async (id: string): Promise<User | undefined> => {
+      if (supabase) {
+        const { data } = await supabase.from('users').select('*').eq('id', id).single();
+        if (data) return data as unknown as User;
+      }
       const users = load<User[]>(DB_USERS);
       return users.find(u => u.id === id);
     },
-    // Modified create to accept password hash
     create: async (username: string, email: string, passwordHash?: string): Promise<User> => {
-      await delay(500);
-      const users = load<any[]>(DB_USERS);
-      if (users.find(u => u.username === username)) throw new Error("Username taken");
-      
       const newUser: any = {
         id: uuidv4(),
         username,
         email,
-        passwordHash, // Store the hash
+        passwordHash,
         role: 'user',
         createdAt: Date.now(),
         lastLogin: Date.now(),
         walletBalance: 0,
         twoFactorEnabled: false,
         preferences: { email: true, push: true, sound: true, telegram: false },
-        subscription: {
-          plan: 'trial',
-          status: 'active',
-          expiryDate: Date.now() + (24 * 60 * 60 * 1000)
-        }
+        subscription: { plan: 'trial', status: 'active', expiryDate: Date.now() + (86400000) }
       };
-      
+
+      if (supabase) {
+        const { error } = await supabase.from('users').insert(newUser);
+        if (error) throw new Error(error.message);
+        
+        // Create Default Strategy for Cloud User
+        await db.strategies.create({ ...DEFAULT_STRATEGY_TEMPLATE, userId: newUser.id, id: uuidv4() } as AlertStrategy);
+        return newUser;
+      }
+
+      // Local Fallback
+      await delay(500);
+      const users = load<any[]>(DB_USERS);
+      if (users.find(u => u.username === username)) throw new Error("Username taken");
       users.push(newUser);
       save(DB_USERS, users);
       
-      // Create Default Strategy for new user
-      await db.strategies.create({
-        ...DEFAULT_STRATEGY_TEMPLATE,
-        userId: newUser.id,
-        id: uuidv4()
-      } as AlertStrategy);
-
-      // Create Default Settings
-      await db.settings.save({
-        userId: newUser.id,
-        apiKey: '',
-        sportMonksApiKey: '',
-        oddsApiKey: '',
-        primaryProvider: 'api-football',
-        refreshRate: 60,
-        useDemoData: true
-      });
-
-      // Update Stats
+      await db.strategies.create({ ...DEFAULT_STRATEGY_TEMPLATE, userId: newUser.id, id: uuidv4() } as AlertStrategy);
       const stats = load<SystemStats>(DB_STATS);
       stats.totalUsers++;
       save(DB_STATS, stats);
 
       return newUser;
     },
-    // Modified login to return the full object (including hash for verification)
     login: async (username: string): Promise<any> => {
+      if (supabase) {
+        // Simple select for demo (In real app, use supabase.auth.signIn)
+        const { data, error } = await supabase.from('users').select('*').or(`username.eq.${username},email.eq.${username}`).single();
+        if (error || !data) throw new Error("User not found in Cloud DB");
+        return data;
+      }
+
       await delay(500);
       const users = load<any[]>(DB_USERS);
       const user = users.find(u => u.username === username || u.email === username);
       if (!user) throw new Error("User not found");
-      if (user.isBanned) throw new Error("Account has been suspended.");
-      
-      if (user.subscription.expiryDate < Date.now()) {
-        user.subscription.status = 'expired';
-      }
-
-      user.lastLogin = Date.now();
-      save(DB_USERS, users);
+      if (user.isBanned) throw new Error("Account suspended");
       return user;
     },
     updateProfile: async (userId: string, data: Partial<User>): Promise<User> => {
-       const users = load<User[]>(DB_USERS);
-       const idx = users.findIndex(u => u.id === userId);
-       if (idx === -1) throw new Error("User not found");
-       
-       const updated = { ...users[idx], ...data };
-       users[idx] = updated;
-       save(DB_USERS, users);
-       return updated;
+      if (supabase) {
+        const { data: updated, error } = await supabase.from('users').update(data).eq('id', userId).select().single();
+        if (error) throw new Error(error.message);
+        return updated as unknown as User;
+      }
+
+      const users = load<User[]>(DB_USERS);
+      const idx = users.findIndex(u => u.id === userId);
+      if (idx === -1) throw new Error("User not found");
+      users[idx] = { ...users[idx], ...data };
+      save(DB_USERS, users);
+      return users[idx];
     },
     toggle2FA: async (userId: string, enable: boolean): Promise<User> => {
-       const users = load<User[]>(DB_USERS);
-       const idx = users.findIndex(u => u.id === userId);
-       if (idx === -1) throw new Error("User not found");
-       
-       users[idx].twoFactorEnabled = enable;
-       save(DB_USERS, users);
-       return users[idx];
+      return db.users.updateProfile(userId, { twoFactorEnabled: enable });
     },
     updateSubscription: async (userId: string, plan: 'weekly' | 'monthly') => {
-      const users = load<User[]>(DB_USERS);
-      const user = users.find(u => u.id === userId);
-      if (!user) return;
-
       const duration = plan === 'weekly' ? 7 : 30;
-      user.subscription = {
-        plan,
-        status: 'active',
-        expiryDate: Date.now() + (duration * 24 * 60 * 60 * 1000)
+      const subData = {
+        subscription: {
+          plan,
+          status: 'active',
+          expiryDate: Date.now() + (duration * 24 * 60 * 60 * 1000)
+        }
       };
-      save(DB_USERS, users);
-      return user;
-    },
-    updateWallet: async (userId: string, amount: number) => {
+      if (supabase) {
+         await supabase.from('users').update(subData).eq('id', userId);
+         const { data } = await supabase.from('users').select('*').eq('id', userId).single();
+         return data as unknown as User;
+      }
+      
       const users = load<User[]>(DB_USERS);
       const user = users.find(u => u.id === userId);
       if (user) {
-        user.walletBalance += amount;
+        user.subscription = subData.subscription as any;
         save(DB_USERS, users);
+        return user;
       }
     },
-    adminBanUser: async (userId: string, isBanned: boolean) => {
-       const users = load<User[]>(DB_USERS);
-       const user = users.find(u => u.id === userId);
-       if(user) {
-         user.isBanned = isBanned;
-         save(DB_USERS, users);
+    updateWallet: async (userId: string, amount: number) => {
+       // Note: This needs atomic increment in real DB
+       const user = await db.users.getById(userId);
+       if (user) {
+         const newBalance = user.walletBalance + amount;
+         await db.users.updateProfile(userId, { walletBalance: newBalance });
        }
     },
+    adminBanUser: async (userId: string, isBanned: boolean) => {
+       await db.users.updateProfile(userId, { isBanned });
+    },
     adminAdjustBalance: async (userId: string, amount: number) => {
-       const users = load<User[]>(DB_USERS);
-       const user = users.find(u => u.id === userId);
-       if(user) {
-         user.walletBalance = amount;
-         save(DB_USERS, users);
-       }
+       await db.users.updateProfile(userId, { walletBalance: amount });
     }
   },
 
   strategies: {
     getAll: async (): Promise<AlertStrategy[]> => {
+      if (supabase) {
+        const { data } = await supabase.from('strategies').select('*');
+        return (data || []) as unknown as AlertStrategy[];
+      }
       await delay(200);
       return load<AlertStrategy[]>(DB_STRATEGIES);
     },
     getByUser: async (userId: string): Promise<AlertStrategy[]> => {
+      if (supabase) {
+        const { data } = await supabase.from('strategies').select('*').eq('userId', userId);
+        return (data || []) as unknown as AlertStrategy[];
+      }
       await delay(200);
       const all = load<AlertStrategy[]>(DB_STRATEGIES);
       return all.filter(s => s.userId === userId);
     },
     create: async (strategy: AlertStrategy): Promise<AlertStrategy> => {
+      if (supabase) {
+        await supabase.from('strategies').insert(strategy);
+        return strategy;
+      }
       const all = load<AlertStrategy[]>(DB_STRATEGIES);
       all.push(strategy);
       save(DB_STRATEGIES, all);
@@ -252,10 +276,13 @@ export const db = {
       const stats = load<SystemStats>(DB_STATS);
       stats.totalStrategies++;
       save(DB_STATS, stats);
-      
       return strategy;
     },
     update: async (strategy: AlertStrategy): Promise<void> => {
+      if (supabase) {
+        await supabase.from('strategies').update(strategy).eq('id', strategy.id);
+        return;
+      }
       const all = load<AlertStrategy[]>(DB_STRATEGIES);
       const idx = all.findIndex(s => s.id === strategy.id);
       if (idx !== -1) {
@@ -264,28 +291,47 @@ export const db = {
       }
     },
     delete: async (id: string): Promise<void> => {
+      if (supabase) {
+        await supabase.from('strategies').delete().eq('id', id);
+        return;
+      }
       let all = load<AlertStrategy[]>(DB_STRATEGIES);
       all = all.filter(s => s.id !== id);
       save(DB_STRATEGIES, all);
     },
     logAlert: async () => {
-       const stats = load<SystemStats>(DB_STATS);
-       stats.totalAlertsSent++;
-       save(DB_STATS, stats);
+       // In cloud, we might increment a counter table
+       if(!supabase) {
+         const stats = load<SystemStats>(DB_STATS);
+         stats.totalAlertsSent++;
+         save(DB_STATS, stats);
+       }
     }
   },
 
   market: {
     getAll: async (): Promise<MarketStrategy[]> => {
+      if (supabase) {
+        const { data } = await supabase.from('market_strategies').select('*');
+        return (data || []) as unknown as MarketStrategy[];
+      }
       await delay(300);
       return load<MarketStrategy[]>(DB_MARKET);
     },
     create: async (strategy: MarketStrategy): Promise<void> => {
+      if (supabase) {
+        await supabase.from('market_strategies').insert(strategy);
+        return;
+      }
       const all = load<MarketStrategy[]>(DB_MARKET);
       all.push(strategy);
       save(DB_MARKET, all);
     },
     delete: async (id: string): Promise<void> => {
+      if (supabase) {
+        await supabase.from('market_strategies').delete().eq('id', id);
+        return;
+      }
       let all = load<MarketStrategy[]>(DB_MARKET);
       all = all.filter(s => s.id !== id);
       save(DB_MARKET, all);
@@ -294,20 +340,25 @@ export const db = {
 
   settings: {
     get: async (userId: string): Promise<ApiSettings> => {
+      if (supabase) {
+        const { data } = await supabase.from('settings').select('*').eq('userId', userId).single();
+        return (data as unknown as ApiSettings) || { 
+          userId, apiKey: '', primaryProvider: 'api-football', refreshRate: 60, useDemoData: true 
+        };
+      }
       await delay(100);
       const all = load<ApiSettings[]>(DB_SETTINGS);
       const found = all.find(s => s.userId === userId);
       return found || { 
-        userId, 
-        apiKey: '', 
-        sportMonksApiKey: '',
-        oddsApiKey: '',
-        primaryProvider: 'api-football', 
-        refreshRate: 60, 
-        useDemoData: true 
+        userId, apiKey: '', sportMonksApiKey: '', oddsApiKey: '', primaryProvider: 'api-football', refreshRate: 60, useDemoData: true 
       };
     },
     save: async (settings: ApiSettings): Promise<void> => {
+      if (supabase) {
+        const { error } = await supabase.from('settings').upsert(settings, { onConflict: 'userId' });
+        if (error) console.error("Settings save failed", error);
+        return;
+      }
       let all = load<ApiSettings[]>(DB_SETTINGS);
       const idx = all.findIndex(s => s.userId === settings.userId);
       if (idx !== -1) all[idx] = settings;
@@ -318,6 +369,7 @@ export const db = {
 
   globalSettings: {
     get: async (): Promise<GlobalSettings> => {
+      // Typically global settings are env vars or a single row in DB
       await delay(100);
       const stored = load<GlobalSettings>(DB_GLOBAL_SETTINGS);
       return stored && Object.keys(stored).length > 0 ? stored : DEFAULT_GLOBAL_SETTINGS;
@@ -330,67 +382,41 @@ export const db = {
 
   transactions: {
     getAll: async (userId: string): Promise<Transaction[]> => {
+      if (supabase) {
+        const { data } = await supabase.from('transactions').select('*').eq('userId', userId).order('date', { ascending: false });
+        return (data || []) as unknown as Transaction[];
+      }
       await delay(200);
       const all = load<Transaction[]>(DB_TRANSACTIONS);
       return all.filter(t => t.userId === userId).sort((a,b) => b.date - a.date);
     },
     create: async (userId: string, amount: number, type: Transaction['type'], description: string) => {
-       const users = load<User[]>(DB_USERS);
-       const user = users.find(u => u.id === userId);
-       if(!user) throw new Error("User not found");
-       
-       if (type === 'deposit' || type === 'sale') user.walletBalance += amount;
-       if (type === 'withdrawal' || type === 'purchase' || type === 'subscription') user.walletBalance -= amount;
-       
-       save(DB_USERS, users);
+       // Update User Balance
+       await db.users.updateWallet(userId, type === 'deposit' || type === 'sale' ? amount : -amount);
 
        const tx: Transaction = {
-         id: uuidv4(),
-         userId,
-         type,
-         amount,
-         description,
-         date: Date.now()
+         id: uuidv4(), userId, type, amount, description, date: Date.now()
        };
        
+       if (supabase) {
+         await supabase.from('transactions').insert(tx);
+         return tx;
+       }
+
        const allTx = load<Transaction[]>(DB_TRANSACTIONS);
        allTx.push(tx);
        save(DB_TRANSACTIONS, allTx);
        return tx;
     },
     processPurchase: async (buyerId: string, authorId: string, strategyName: string, amount: number) => {
-      const users = load<User[]>(DB_USERS);
-      const buyer = users.find(u => u.id === buyerId);
-      const author = users.find(u => u.id === authorId);
-
-      if (!buyer) throw new Error("Buyer not found");
+      // Deduction
+      await db.transactions.create(buyerId, amount, 'purchase', `Bought strategy: ${strategyName}`);
       
-      buyer.walletBalance -= amount;
-      
-      const txBuyer: Transaction = {
-        id: uuidv4(), userId: buyerId, type: 'purchase', amount,
-        description: `Bought strategy: ${strategyName}`, date: Date.now()
-      };
-      
-      if (author) {
-        const netEarnings = amount * 0.85; // 15% Platform Fee
-        author.walletBalance += netEarnings;
-        
-        const txSeller: Transaction = {
-          id: uuidv4(), userId: authorId, type: 'sale', amount: netEarnings,
-          description: `Sold strategy: ${strategyName}`, date: Date.now()
-        };
-        const allTx = load<Transaction[]>(DB_TRANSACTIONS);
-        allTx.push(txBuyer);
-        allTx.push(txSeller);
-        save(DB_TRANSACTIONS, allTx);
-      } else {
-        const allTx = load<Transaction[]>(DB_TRANSACTIONS);
-        allTx.push(txBuyer);
-        save(DB_TRANSACTIONS, allTx);
+      // Credit Author (if not system)
+      if (authorId && authorId !== 'system') {
+        const netEarnings = amount * 0.85; 
+        await db.transactions.create(authorId, netEarnings, 'sale', `Sold strategy: ${strategyName}`);
       }
-      
-      save(DB_USERS, users);
     }
   },
 
@@ -405,20 +431,23 @@ export const db = {
 
   audit: {
     getAll: async (): Promise<AuditLog[]> => {
+      if (supabase) {
+        const { data } = await supabase.from('audit_logs').select('*').order('timestamp', { ascending: false });
+        return (data || []) as unknown as AuditLog[];
+      }
       await delay(100);
       return load<AuditLog[]>(DB_AUDIT).sort((a,b) => b.timestamp - a.timestamp);
     },
     log: async (adminId: string, action: string, details: string, targetId?: string) => {
+      const entry = {
+        id: uuidv4(), adminId, action, details, targetId, timestamp: Date.now(), ip: '127.0.0.1'
+      };
+      if (supabase) {
+        await supabase.from('audit_logs').insert(entry);
+        return;
+      }
       const logs = load<AuditLog[]>(DB_AUDIT);
-      logs.push({
-        id: uuidv4(),
-        adminId,
-        action,
-        details,
-        targetId,
-        timestamp: Date.now(),
-        ip: '127.0.0.1' // Mock IP
-      });
+      logs.push(entry);
       save(DB_AUDIT, logs);
     }
   }
