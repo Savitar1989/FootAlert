@@ -1,0 +1,15 @@
+{
+  "name": "footalert-backend",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "axios": "^1.7.2",
+    "node-cron": "^3.0.3",
+    "dotenv": "^16.4.5"
+  }
+}
